@@ -1,0 +1,657 @@
+#include "MainWindow.h"
+#include "ui_MainWindow.h"
+
+#include <fstream>
+#include <sstream>
+
+#include <QAction>
+#include <QApplication>
+#include <QCloseEvent>
+#include <QDir>
+#include <QFile>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QIcon>
+#include <QLabel>
+#include <QMenuBar>
+#include <QMessageBox>
+#include <QSettings>
+#include <QStandardPaths>
+#include <QStatusBar>
+#include <QTimer>
+#include <QToolBar>
+
+#include "bridge/AudioBridge.h"
+#include "widgets/PianoWidget.h"
+#include "widgets/KeyboardOverlayWidget.h"
+#include "widgets/Vst3EditorWindow.h"
+#include "dialogs/SoundFontDialog.h"
+#include "dialogs/KeyMapEditorDialog.h"
+#include "dialogs/SettingsDialog.h"
+#include "keymap/KeyMapParser.h"
+#include "recorder/KpsFormat.h"
+#include "synth/IPluginEditor.h"
+#include "synth/SynthFactory.h"
+
+namespace {
+
+// QSettings key storing the folder the "Open VST3" dialog last used. Persisted
+// in the registry (HKCU) so it survives restarts and re-installs.
+constexpr auto kVst3DirKey = "vst3_dir";
+
+// Where the "Open VST3 Instrument" dialog should start:
+//   1. the user's last-used folder (if it still exists), else
+//   2. the first standard Windows VST3 install location that exists.
+// Users change the default simply by browsing elsewhere — the new folder is
+// remembered. Power users can also pre-seed/override the registry value
+// HKCU\Software\keypiano\keypiano\vst3_dir.
+QString vst3StartDir() {
+    QSettings settings("keypiano", "keypiano");
+    const QString saved = settings.value(kVst3DirKey).toString();
+    if (!saved.isEmpty() && QDir(saved).exists()) return saved;
+
+    const QString candidates[] = {
+        QStringLiteral("C:/Program Files/Common Files/VST3"),
+        QDir::homePath() + QStringLiteral("/AppData/Local/Programs/Common/VST3"),
+    };
+    for (const QString& dir : candidates) {
+        if (QDir(dir).exists()) return dir;
+    }
+    return {};  // no standard location — let Qt fall back to the cwd
+}
+
+}  // namespace
+
+namespace keypiano::ui {
+
+MainWindow::MainWindow(QWidget* parent)
+    : QMainWindow(parent), ui_(new Ui::MainWindow) {
+    ui_->setupUi(this);
+    setWindowIcon(QIcon(":/icons/app.png"));
+
+    setupMenus();
+    setupToolBar();
+    setupStatusBar();
+    setupEngine();
+    setupPianoWidget();
+    loadDefaultKeymap();
+    loadDefaultSoundFont();
+
+    status_timer_ = new QTimer(this);
+    connect(status_timer_, &QTimer::timeout, this, &MainWindow::updateStatus);
+    status_timer_->start(500);
+}
+
+MainWindow::~MainWindow() = default;
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    status_timer_->stop();
+    closePluginEditor();  // detach plug-in view while synth_ is still alive
+    if (piano_widget_) piano_widget_->releaseAll();
+    if (audio_bridge_) audio_bridge_->stop();
+    if (recorder_) {
+        recorder_->stopPlayback();
+        recorder_->stopRecording();
+    }
+    if (hook_)   hook_->uninstall();
+    if (engine_) engine_->close();
+    QMainWindow::closeEvent(event);
+}
+
+// ── Setup ──────────────────────────────────────────────────────────────────────
+
+void MainWindow::setupMenus() {
+    auto* file_menu = menuBar()->addMenu(tr("&File"));
+
+    act_open_sf2_ = new QAction(tr("Open SF&2..."), this);
+    act_open_sf2_->setShortcut(QKeySequence("Ctrl+O"));
+    connect(act_open_sf2_, &QAction::triggered, this, &MainWindow::onOpenSf2);
+    file_menu->addAction(act_open_sf2_);
+
+#ifdef KEYPIANO_ENABLE_VST3
+    act_open_vst3_ = new QAction(tr("Open &VST3 Instrument..."), this);
+    act_open_vst3_->setShortcut(QKeySequence("Ctrl+Shift+O"));
+    connect(act_open_vst3_, &QAction::triggered, this, &MainWindow::onOpenVst3);
+    file_menu->addAction(act_open_vst3_);
+
+    act_show_editor_ = new QAction(tr("Show Plugin &Editor..."), this);
+    act_show_editor_->setShortcut(QKeySequence("Ctrl+E"));
+    act_show_editor_->setEnabled(false);  // enabled once a VST3 editor is loaded
+    connect(act_show_editor_, &QAction::triggered, this, &MainWindow::onShowPluginEditor);
+    file_menu->addAction(act_show_editor_);
+#endif
+
+    act_open_keymap_ = new QAction(tr("Open &Keymap..."), this);
+    act_open_keymap_->setShortcut(QKeySequence("Ctrl+K"));
+    connect(act_open_keymap_, &QAction::triggered, this, &MainWindow::onOpenKeymap);
+    file_menu->addAction(act_open_keymap_);
+
+    act_edit_keymap_ = new QAction(tr("&Edit Keymap..."), this);
+    act_edit_keymap_->setEnabled(false);  // enabled after a keymap is loaded
+    connect(act_edit_keymap_, &QAction::triggered, this, &MainWindow::onEditKeymap);
+    file_menu->addAction(act_edit_keymap_);
+
+    file_menu->addSeparator();
+
+    act_settings_ = new QAction(tr("&Settings..."), this);
+    act_settings_->setShortcut(QKeySequence("Ctrl+,"));
+    connect(act_settings_, &QAction::triggered, this, &MainWindow::onOpenSettings);
+    file_menu->addAction(act_settings_);
+
+    file_menu->addSeparator();
+
+    auto* act_exit = new QAction(tr("E&xit"), this);
+    act_exit->setShortcut(QKeySequence("Ctrl+Q"));
+    connect(act_exit, &QAction::triggered, qApp, &QApplication::quit);
+    file_menu->addAction(act_exit);
+
+    auto* rec_menu = menuBar()->addMenu(tr("&Record"));
+
+    act_rec_start_ = new QAction(tr("&Start Recording"), this);
+    act_rec_start_->setShortcut(QKeySequence("Ctrl+R"));
+    connect(act_rec_start_, &QAction::triggered, this, &MainWindow::onStartRecording);
+    rec_menu->addAction(act_rec_start_);
+
+    act_stop_ = new QAction(tr("&Stop"), this);
+    act_stop_->setShortcut(QKeySequence("Ctrl+."));
+    act_stop_->setEnabled(false);
+    connect(act_stop_, &QAction::triggered, this, &MainWindow::onStop);
+    rec_menu->addAction(act_stop_);
+
+    rec_menu->addSeparator();
+
+    act_playback_ = new QAction(tr("&Playback"), this);
+    act_playback_->setShortcut(QKeySequence("Ctrl+P"));
+    act_playback_->setEnabled(false);
+    connect(act_playback_, &QAction::triggered, this, &MainWindow::onStartPlayback);
+    rec_menu->addAction(act_playback_);
+}
+
+void MainWindow::setupToolBar() {
+    act_rec_start_->setIcon(QIcon(":/icons/record.png"));
+    act_stop_->setIcon(QIcon(":/icons/stop.png"));
+    act_playback_->setIcon(QIcon(":/icons/play.png"));
+
+    auto* tb = addToolBar(tr("Controls"));
+    tb->setMovable(false);
+    tb->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    tb->addAction(act_rec_start_);
+    tb->addAction(act_stop_);
+    tb->addSeparator();
+    tb->addAction(act_playback_);
+}
+
+void MainWindow::setupStatusBar() {
+    lbl_sf2_name_ = new QLabel("SF2: (none)", this);
+    lbl_cpu_      = new QLabel("CPU: --", this);
+    lbl_latency_  = new QLabel("Latency: --", this);
+
+    statusBar()->addWidget(lbl_sf2_name_);
+    statusBar()->addPermanentWidget(lbl_cpu_);
+    statusBar()->addPermanentWidget(new QLabel("|", this));
+    statusBar()->addPermanentWidget(lbl_latency_);
+}
+
+void MainWindow::setupEngine() {
+    synth_  = createFluidSynth();
+    engine_ = std::make_unique<audio::AudioEngine>();
+
+    audio::AudioEngine::Config cfg;  // defaults: 44100 Hz, 256 frames
+    audio_cfg_ = cfg;
+    if (!engine_->open(cfg, synth_.get())) {
+        QMessageBox::warning(this, tr("Audio Error"),
+                             tr("Failed to open audio output device.\n"
+                                "SF2 playback will be unavailable."));
+        engine_.reset();
+        synth_.reset();
+        recorder_ = std::make_unique<Recorder>([](const MidiEvent&) {});
+        return;
+    }
+
+    recorder_ = std::make_unique<Recorder>(
+        Recorder::makeAudioDispatch(engine_.get()));
+
+    installHook();
+
+    audio_bridge_ = std::make_unique<AudioBridge>(engine_.get());
+    // Signals connected to PianoWidget in setupPianoWidget().
+    audio_bridge_->start();
+}
+
+void MainWindow::installHook() {
+    hook_ = KeyboardHook::create();
+    bool ok = hook_->install([this](const KeyEvent& kev) {
+        auto midi = keymap_.resolve(kev.vk_code, kev.is_keydown, ch0_, ch1_);
+        if (!midi) return;
+
+        if (recorder_ && recorder_->state() == Recorder::State::Recording) {
+            using namespace std::chrono;
+            midi->ts_us = duration_cast<microseconds>(
+                              steady_clock::now() - record_start_)
+                              .count();
+            recorder_->onMidiEvent(*midi);
+        }
+
+        if (!engine_) return;
+        switch (midi->type) {
+            case EventType::NoteOn:
+                engine_->postNoteOn(midi->chan, midi->note, midi->vel);
+                break;
+            case EventType::NoteOff:
+                engine_->postNoteOff(midi->chan, midi->note);
+                break;
+            case EventType::ControlChange:
+                engine_->postControlChange(midi->chan, midi->note, midi->vel);
+                break;
+            case EventType::AllNotesOff:
+                engine_->postAllNotesOff(midi->chan);
+                break;
+        }
+    });
+    if (!ok) {
+        QMessageBox::warning(this, tr("Hook Error"),
+                             tr("Failed to install keyboard hook.\n"
+                                "Keyboard input will be unavailable."));
+        hook_.reset();
+    }
+}
+
+void MainWindow::restartEngine(const audio::AudioEngine::Config& cfg) {
+    stopEngine();
+    startEngine(cfg);
+}
+
+void MainWindow::stopEngine() {
+    // Tear down in reverse construction order. engine_->close() blocks until the
+    // audio callback has stopped (and shuts down the *current* synth_), so once
+    // this returns the caller may safely swap or destroy synth_.
+    if (audio_bridge_) { audio_bridge_->stop(); audio_bridge_.reset(); }
+    if (recorder_) {
+        recorder_->stopPlayback();
+        recorder_->stopRecording();
+        recorder_.reset();
+    }
+    if (hook_) { hook_->uninstall(); hook_.reset(); }
+    if (engine_) { engine_->close(); engine_.reset(); }
+}
+
+void MainWindow::startEngine(const audio::AudioEngine::Config& cfg) {
+    engine_ = std::make_unique<audio::AudioEngine>();
+    if (!engine_->open(cfg, synth_.get())) {
+        QMessageBox::critical(this, tr("Audio Error"),
+                              tr("Failed to open audio with the new settings.\n"
+                                 "Reverting to defaults."));
+        engine_.reset();
+        recorder_ = std::make_unique<Recorder>([](const MidiEvent&) {});
+        return;
+    }
+
+    audio_cfg_ = cfg;
+    recorder_ = std::make_unique<Recorder>(
+        Recorder::makeAudioDispatch(engine_.get()));
+    installHook();
+
+    audio_bridge_ = std::make_unique<AudioBridge>(engine_.get());
+    audio_bridge_->start();
+
+    // Reconnect PianoWidget signals to the new bridge.
+    if (piano_widget_ && audio_bridge_) {
+        connect(audio_bridge_.get(), &AudioBridge::noteActivated,
+                piano_widget_,       &PianoWidget::onNoteActivated);
+        connect(audio_bridge_.get(), &AudioBridge::noteReleased,
+                piano_widget_,       &PianoWidget::onNoteReleased);
+        connect(piano_widget_, &PianoWidget::mouseNoteOn,
+                this, [this](int midi, int vel) {
+                    engine_->postNoteOn(0,
+                        static_cast<uint8_t>(midi),
+                        static_cast<uint8_t>(vel));
+                });
+        connect(piano_widget_, &PianoWidget::mouseNoteOff,
+                this, [this](int midi) {
+                    engine_->postNoteOff(0, static_cast<uint8_t>(midi));
+                });
+    }
+}
+
+void MainWindow::setupPianoWidget() {
+    piano_widget_ = new PianoWidget(this);
+    // Replace the placeholder central widget from the .ui file.
+    setCentralWidget(piano_widget_);
+
+    if (audio_bridge_) {
+        connect(audio_bridge_.get(), &AudioBridge::noteActivated,
+                piano_widget_,       &PianoWidget::onNoteActivated);
+        connect(audio_bridge_.get(), &AudioBridge::noteReleased,
+                piano_widget_,       &PianoWidget::onNoteReleased);
+    }
+
+    if (engine_) {
+        connect(piano_widget_, &PianoWidget::mouseNoteOn,
+                this, [this](int midi, int vel) {
+                    engine_->postNoteOn(0,
+                        static_cast<uint8_t>(midi),
+                        static_cast<uint8_t>(vel));
+                });
+        connect(piano_widget_, &PianoWidget::mouseNoteOff,
+                this, [this](int midi) {
+                    engine_->postNoteOff(0, static_cast<uint8_t>(midi));
+                });
+    }
+
+    overlay_ = new KeyboardOverlayWidget(piano_widget_);
+}
+
+void MainWindow::loadDefaultKeymap() {
+    QFile f(":/keymaps/default.map");
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+    const QByteArray map_text = f.readAll();
+
+    auto result = KeyMapParser::parse(map_text.toStdString());
+    if (!result.errors.empty()) {
+        // The bundled default map should always parse cleanly; surface any
+        // regression instead of silently shipping a broken default.
+        QString msg;
+        for (const auto& e : result.errors)
+            msg += QString::fromStdString(e) + "\n";
+        QMessageBox::warning(this, tr("Default Keymap"),
+                             tr("Bundled default keymap has issues:\n%1")
+                                 .arg(msg.trimmed()));
+    }
+    keymap_ = std::move(result.map);
+    if (overlay_) overlay_->updateFromKeyMap(keymap_);
+    act_edit_keymap_->setEnabled(true);
+}
+
+void MainWindow::loadDefaultSoundFont() {
+    // FluidSynth's sfload() needs a real file path; the SF2 is an embedded Qt
+    // resource, so extract it to a stable per-user cache file once, then load.
+    // This gives an audible piano on first launch without bundling a loose file
+    // the user could lose. (They can still Open SF2 / Open VST3 to change it.)
+    if (!synth_ || current_backend_ != Backend::FluidSynth) return;
+
+    const QString dir =
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(dir);
+    const QString sf2_path = dir + "/default_piano.sf2";
+
+    if (!QFile::exists(sf2_path)) {
+        QFile src(":/soundfonts/default_piano.sf2");
+        if (!src.open(QIODevice::ReadOnly)) return;
+        QFile dst(sf2_path);
+        if (!dst.open(QIODevice::WriteOnly)) return;
+        dst.write(src.readAll());
+        dst.close();
+    }
+
+    if (synth_->loadInstrument(sf2_path.toStdString())) {
+        current_sf2_name_ = "default_piano.sf2";
+        lbl_sf2_name_->setText("SF2: " + current_sf2_name_ + tr(" (built-in)"));
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+void MainWindow::syncRecordActions() {
+    auto state = recorder_ ? recorder_->state() : Recorder::State::Idle;
+    bool idle  = (state == Recorder::State::Idle);
+    bool busy  = (state == Recorder::State::Recording) ||
+                 (state == Recorder::State::Playing);
+
+    act_rec_start_->setEnabled(idle);
+    act_stop_->setEnabled(busy);
+    act_playback_->setEnabled(idle && recorder_ &&
+                              recorder_->eventCount() > 0);
+}
+
+// ── Slots ─────────────────────────────────────────────────────────────────────
+
+void MainWindow::onOpenSf2() {
+    SoundFontDialog dlg(this);
+    dlg.setInitialPath(current_sf2_name_.isEmpty()
+                       ? QString() : current_sf2_name_);
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    const QString path = dlg.selectedPath();
+    if (path.isEmpty()) return;
+
+    // Switch back to the FluidSynth backend if a VST3 plug-in was active.
+    if (current_backend_ != Backend::FluidSynth) {
+        closePluginEditor();   // detach before the VST3 synth_ is destroyed
+        stopEngine();          // stop the audio callback BEFORE swapping synth_
+        synth_ = createFluidSynth();
+        current_backend_ = Backend::FluidSynth;
+        startEngine(audio_cfg_);
+        updateEditorAction();
+    }
+    if (!engine_ || !synth_) {
+        QMessageBox::critical(this, tr("Error"),
+                              tr("Audio engine is not running."));
+        return;
+    }
+
+    if (!synth_->loadInstrument(path.toStdString())) {
+        QMessageBox::critical(this, tr("Error"),
+                              tr("Failed to load SoundFont:\n%1").arg(path));
+        return;
+    }
+    current_sf2_name_ = QFileInfo(path).fileName();
+    lbl_sf2_name_->setText("SF2: " + current_sf2_name_);
+    statusBar()->showMessage(tr("Loaded: %1").arg(current_sf2_name_), 3000);
+}
+
+void MainWindow::onOpenVst3() {
+#ifdef KEYPIANO_ENABLE_VST3
+    // VST3 plug-ins on Windows are bundle folders ("Foo.vst3/Contents/..."),
+    // so the user picks the .vst3 folder itself. The dialog opens at the
+    // standard VST3 install location (or wherever they last browsed) so the
+    // installed plug-ins are right there.
+    QString path = QFileDialog::getExistingDirectory(
+        this, tr("Select VST3 instrument (.vst3 bundle folder)"), vst3StartDir());
+    if (path.isEmpty()) return;
+
+    // Detach any open editor before the current synth_ is destroyed.
+    closePluginEditor();
+
+    // Stop the audio callback BEFORE swapping synth_ (else the callback would
+    // dereference the freed old backend), then bring the engine back up.
+    stopEngine();
+    synth_ = createVst3Synth();
+    current_backend_ = Backend::Vst3;
+    startEngine(audio_cfg_);
+    if (!engine_ || !synth_) {
+        QMessageBox::critical(this, tr("Error"),
+                              tr("Failed to start audio with the VST3 backend."));
+        return;
+    }
+
+    if (!synth_->loadInstrument(path.toStdString())) {
+        QMessageBox::critical(
+            this, tr("Error"),
+            tr("Failed to load VST3 instrument:\n%1\n\n"
+               "Make sure the folder is a valid .vst3 bundle containing an "
+               "instrument plug-in.").arg(path));
+        return;
+    }
+    // Remember the parent folder so next time the dialog opens right here.
+    QSettings("keypiano", "keypiano")
+        .setValue(kVst3DirKey, QFileInfo(path).absolutePath());
+
+    current_sf2_name_ = QFileInfo(path).fileName();
+    lbl_sf2_name_->setText("VST3: " + current_sf2_name_);
+    statusBar()->showMessage(tr("Loaded VST3: %1").arg(current_sf2_name_), 3000);
+    updateEditorAction();
+#endif
+}
+
+void MainWindow::onShowPluginEditor() {
+    if (editor_window_) {            // already open — bring it forward
+        editor_window_->show();
+        editor_window_->raise();
+        editor_window_->activateWindow();
+        return;
+    }
+
+    auto* editor = dynamic_cast<IPluginEditor*>(synth_.get());
+    if (!editor || !editor->hasEditor()) {
+        QMessageBox::information(this, tr("Plugin Editor"),
+                                 tr("The current backend has no plug-in editor."));
+        return;
+    }
+
+    auto* win = new Vst3EditorWindow(editor, this);
+    if (!win->openEditor()) {
+        delete win;
+        QMessageBox::information(
+            this, tr("Plugin Editor"),
+            tr("This plug-in does not provide a custom editor window."));
+        return;
+    }
+    editor_window_ = win;
+    connect(win, &QObject::destroyed, this,
+            [this] { editor_window_ = nullptr; });
+    win->show();
+}
+
+void MainWindow::closePluginEditor() {
+    if (editor_window_) {
+        // close() runs the window's closeEvent synchronously (detaching the
+        // plug-in view) before WA_DeleteOnClose schedules deletion.
+        editor_window_->close();
+        editor_window_ = nullptr;
+    }
+}
+
+void MainWindow::updateEditorAction() {
+    if (!act_show_editor_) return;
+    auto* editor = dynamic_cast<IPluginEditor*>(synth_.get());
+    act_show_editor_->setEnabled(editor && editor->hasEditor());
+}
+
+void MainWindow::onEditKeymap() {
+    KeyMapEditorDialog dlg(keymap_, this);
+    if (dlg.exec() != QDialog::Accepted) return;
+    keymap_ = dlg.keyMap();
+    if (overlay_) overlay_->updateFromKeyMap(keymap_);
+    statusBar()->showMessage(tr("Keymap labels updated."), 2000);
+}
+
+void MainWindow::onOpenSettings() {
+    SettingsDialog dlg(audio_cfg_, this);
+    if (dlg.exec() != QDialog::Accepted) return;
+    auto new_cfg = dlg.config();
+    if (new_cfg.device_name  == audio_cfg_.device_name  &&
+        new_cfg.sample_rate  == audio_cfg_.sample_rate   &&
+        new_cfg.buffer_frames == audio_cfg_.buffer_frames)
+        return;
+    restartEngine(new_cfg);
+    statusBar()->showMessage(tr("Audio settings applied."), 3000);
+}
+
+void MainWindow::onOpenKeymap() {
+    QString path = QFileDialog::getOpenFileName(
+        this, tr("Open Keymap"), {},
+        tr("Keymap files (*.map);;All files (*)"));
+    if (path.isEmpty()) return;
+
+    std::ifstream f(path.toStdString());
+    if (!f) {
+        QMessageBox::critical(this, tr("Error"),
+                              tr("Cannot read keymap:\n%1").arg(path));
+        return;
+    }
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    auto result = KeyMapParser::parse(ss.str());
+    if (!result.errors.empty()) {
+        QString msg;
+        for (const auto& e : result.errors)
+            msg += QString::fromStdString(e) + "\n";
+        QMessageBox::warning(this, tr("Keymap Warnings"), msg.trimmed());
+    }
+    keymap_ = std::move(result.map);
+    if (overlay_) overlay_->updateFromKeyMap(keymap_);
+    act_edit_keymap_->setEnabled(true);
+    statusBar()->showMessage(
+        tr("Loaded keymap: %1").arg(QFileInfo(path).fileName()), 3000);
+}
+
+void MainWindow::onStartRecording() {
+    if (!recorder_) return;
+    record_start_ = std::chrono::steady_clock::now();
+    recorder_->startRecording();
+    syncRecordActions();
+    statusBar()->showMessage(tr("Recording..."));
+}
+
+void MainWindow::onStop() {
+    if (!recorder_) return;
+
+    auto state = recorder_->state();
+    if (state == Recorder::State::Playing) {
+        recorder_->stopPlayback();
+        syncRecordActions();
+        statusBar()->showMessage(tr("Playback stopped."), 3000);
+        return;
+    }
+
+    recorder_->stopRecording();
+    syncRecordActions();
+
+    auto n = static_cast<int>(recorder_->eventCount());
+    statusBar()->showMessage(tr("Recording stopped — %1 events.").arg(n));
+
+    if (n == 0) return;
+
+    auto reply = QMessageBox::question(
+        this, tr("Save Recording"),
+        tr("Save %1 event(s) to file?").arg(n),
+        QMessageBox::Yes | QMessageBox::No);
+    if (reply != QMessageBox::Yes) return;
+
+    QString path = QFileDialog::getSaveFileName(
+        this, tr("Save Recording"), {},
+        tr("keypiano performance (*.kps);;All files (*)"));
+    if (path.isEmpty()) return;
+    if (!path.endsWith(".kps", Qt::CaseInsensitive)) path += ".kps";
+
+    KpsMeta meta;
+    meta.title = current_sf2_name_.toStdString();
+    std::string err;
+    if (!recorder_->saveToFile(path.toStdString(), meta, &err)) {
+        QMessageBox::critical(this, tr("Save Error"),
+                              tr("Failed to save:\n%1")
+                                  .arg(QString::fromStdString(err)));
+    } else {
+        statusBar()->showMessage(
+            tr("Saved: %1").arg(QFileInfo(path).fileName()), 5000);
+    }
+}
+
+void MainWindow::onStartPlayback() {
+    if (!recorder_) return;
+    if (!recorder_->startPlayback()) {
+        QMessageBox::information(this, tr("Playback"),
+                                 tr("Nothing to play back.\n"
+                                    "Record something first."));
+        return;
+    }
+    syncRecordActions();
+    statusBar()->showMessage(
+        tr("Playing back %1 event(s)...")
+            .arg(static_cast<int>(recorder_->eventCount())));
+}
+
+void MainWindow::updateStatus() {
+    if (engine_ && engine_->isOpen()) {
+        const auto& s = engine_->stats();
+        uint32_t lat = s.latency_us.load(std::memory_order_relaxed);
+        double   cpu = s.cpu_load.load(std::memory_order_relaxed);
+        lbl_latency_->setText(
+            tr("Latency: %1 ms").arg(lat / 1000.0, 0, 'f', 1));
+        lbl_cpu_->setText(
+            tr("CPU: %1%").arg(cpu * 100.0, 0, 'f', 1));
+    }
+    syncRecordActions();
+}
+
+} // namespace keypiano::ui

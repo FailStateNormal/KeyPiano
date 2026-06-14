@@ -1,0 +1,41 @@
+{
+    "name": "keypiano",
+    "version": "1.0.0",
+    "license": "GPL-3.0-only",
+    "dependencies": [
+        {
+            "name": "fluidsynth",
+            "version>=": "2.3.1"
+        },
+        {
+            "name": "rtaudio",
+            "version>=": "6.0.1"
+        }
+    ],
+    "features": {
+        "gui": {
+            "description": "Qt6 Widgets GUI (Phase 3+)",
+            "dependencies": [
+                {
+                    "name": "qtbase",
+                    "features": ["widgets"]
+                }
+            ]
+        },
+        "tests": {
+            "description": "GoogleTest unit tests",
+            "dependencies": [
+                {
+                    "name": "gtest",
+                    "version>=": "1.14.0"
+                }
+            ]
+        },
+        "vst3": {
+            "description": "VST3 instrument host (Phase 4) — dual GPLv3/proprietary SDK, GPLv3 branch used",
+            "dependencies": [
+                "vst3sdk"
+            ]
+        }
+    }
+}

@@ -1,0 +1,71 @@
+FreePiano 2.1
+; keypiano default keymap — QWERTY, two chromatic octaves (C4–B5)
+; White keys: Z-M row (octave 4), Q-U row (octave 5)
+; Black keys sit ABOVE the gap between their two white keys, matching a real
+;   piano: C#=S (between Z/X), D#=D, F#=G, G#=H, A#=J  (octave 4)
+;          C#=2 (between Q/W), D#=3, F#=5, G#=6, A#=7  (octave 5)
+; F1/F2 = octave down/up  |  Space = sustain
+
+; ── Octave 4 – white keys (Z row) ────────────────────────────────────────────
+Keydown Z Note In_0 C4
+Label Z Z
+Keydown X Note In_0 D4
+Label X X
+Keydown C Note In_0 E4
+Label C C
+Keydown V Note In_0 F4
+Label V V
+Keydown B Note In_0 G4
+Label B B
+Keydown N Note In_0 A4
+Label N N
+Keydown M Note In_0 B4
+Label M M
+
+; ── Octave 4 – black keys (home row, above the gap between white keys) ───────
+Keydown S Note In_0 C#4
+Label S S
+Keydown D Note In_0 Eb4
+Label D D
+Keydown G Note In_0 F#4
+Label G G
+Keydown H Note In_0 Ab4
+Label H H
+Keydown J Note In_0 Bb4
+Label J J
+
+; ── Octave 5 – white keys (Q row) ────────────────────────────────────────────
+Keydown Q Note In_0 C5
+Label Q Q
+Keydown W Note In_0 D5
+Label W W
+Keydown E Note In_0 E5
+Label E E
+Keydown R Note In_0 F5
+Label R R
+Keydown T Note In_0 G5
+Label T T
+Keydown Y Note In_0 A5
+Label Y Y
+Keydown U Note In_0 B5
+Label U U
+
+; ── Octave 5 – black keys (number row, above the gap between white keys) ──────
+Keydown 2 Note In_0 C#5
+Label 2 2
+Keydown 3 Note In_0 Eb5
+Label 3 3
+Keydown 5 Note In_0 F#5
+Label 5 5
+Keydown 6 Note In_0 Ab5
+Label 6 6
+Keydown 7 Note In_0 Bb5
+Label 7 7
+
+; ── Controls ──────────────────────────────────────────────────────────────────
+Keydown F1 Octave In_0 Dec 1
+Label F1 Oct-
+Keydown F2 Octave In_0 Inc 1
+Label F2 Oct+
+Keydown Space Sustain In_0 Set 127
+Label Space Sus

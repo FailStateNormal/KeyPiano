@@ -1,0 +1,14 @@
+<RCC>
+  <!-- prefix="/" so file paths map 1:1 to ":/icons/..." and ":/keymaps/...".
+       (A per-folder prefix like "/icons" would double up to ":/icons/icons/..."
+       and the code's ":/icons/app.png" / ":/keymaps/default.map" would not
+       resolve — leaving toolbar icons blank and the default keymap unloaded.) -->
+  <qresource prefix="/">
+    <file>icons/app.png</file>
+    <file>icons/record.png</file>
+    <file>icons/play.png</file>
+    <file>icons/stop.png</file>
+    <file>keymaps/default.map</file>
+    <file>soundfonts/default_piano.sf2</file>
+  </qresource>
+</RCC>

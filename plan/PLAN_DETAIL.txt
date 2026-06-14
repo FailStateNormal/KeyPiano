@@ -1,0 +1,349 @@
+================================================================================
+  keypiano — 详细技术设计方案
+  日期：2026-06-14
+================================================================================
+
+一、目录结构（完整）
+================================================================================
+
+keypiano/
+├── CMakeLists.txt
+├── CMakePresets.json
+├── vcpkg.json
+├── vcpkg-configuration.json
+├── .gitignore
+├── .clang-format
+├── LICENSE                            # GPL v3
+├── README.md
+│
+├── src/
+│   ├── main.cpp
+│   ├── core/                          # 纯 C++20，零 Qt 依赖
+│   │   ├── CMakeLists.txt
+│   │   ├── audio/
+│   │   │   ├── MidiEvent.h            # POD 结构体: {type, chan, note, vel, ts_us}
+│   │   │   ├── LockFreeQueue.h        # MPSC 无锁队列，header-only 模板
+│   │   │   ├── AudioEngine.h
+│   │   │   ├── AudioEngine.cpp
+│   │   │   ├── AudioCallback.h
+│   │   │   └── AudioCallback.cpp
+│   │   ├── synth/
+│   │   │   ├── SynthesizerBase.h      # 纯虚接口
+│   │   │   ├── FluidSynthEngine.h
+│   │   │   ├── FluidSynthEngine.cpp
+│   │   │   ├── VstSynthEngine.h       # Phase 4
+│   │   │   ├── VstSynthEngine.cpp     # Phase 4
+│   │   │   └── SynthFactory.h
+│   │   ├── keymap/
+│   │   │   ├── KeyMap.h
+│   │   │   ├── KeyMap.cpp
+│   │   │   ├── KeyMapParser.h         # 支持 FreePiano 2.0 和 2.1 两套语法
+│   │   │   ├── KeyMapParser.cpp
+│   │   │   ├── KeyMapSerializer.h
+│   │   │   └── KeyMapSerializer.cpp
+│   │   ├── recorder/
+│   │   │   ├── Recorder.h
+│   │   │   ├── Recorder.cpp
+│   │   │   ├── KpsFormat.h            # .kps 格式读写
+│   │   │   └── KpsFormat.cpp
+│   │   ├── config/
+│   │   │   ├── AppConfig.h
+│   │   │   ├── AppConfig.cpp
+│   │   │   ├── CfgParser.h            # 兼容 FreePiano .cfg 格式
+│   │   │   └── CfgParser.cpp
+│   │   └── platform/
+│   │       ├── KeyboardHook.h         # 纯虚接口 + 工厂函数
+│   │       └── win32/
+│   │           ├── Win32KeyboardHook.h
+│   │           └── Win32KeyboardHook.cpp   # WH_KEYBOARD_LL 实现
+│   │
+│   └── ui/                            # Qt6 Widgets，依赖 core
+│       ├── CMakeLists.txt
+│       ├── MainWindow.h
+│       ├── MainWindow.cpp
+│       ├── MainWindow.ui
+│       ├── widgets/
+│       │   ├── PianoWidget.h          # 自绘 88 键钢琴，QPainter
+│       │   ├── PianoWidget.cpp
+│       │   ├── KeyboardOverlayWidget.h
+│       │   └── KeyboardOverlayWidget.cpp
+│       ├── dialogs/
+│       │   ├── SettingsDialog.h
+│       │   ├── SettingsDialog.cpp
+│       │   ├── KeyMapEditorDialog.h
+│       │   ├── KeyMapEditorDialog.cpp
+│       │   ├── SoundFontDialog.h
+│       │   └── SoundFontDialog.cpp
+│       └── bridge/
+│           ├── AudioBridge.h          # QTimer 16ms 轮询 feedback_queue
+│           └── AudioBridge.cpp        # emit Qt signals 通知 UI 更新
+│
+├── tests/
+│   ├── CMakeLists.txt
+│   ├── test_keymap_parser.cpp
+│   ├── test_kps_format.cpp
+│   ├── test_lockfree_queue.cpp
+│   ├── test_recorder.cpp
+│   └── test_cfg_parser.cpp
+│
+├── resources/
+│   ├── keypiano.qrc
+│   ├── icons/
+│   │   ├── app.ico
+│   │   ├── record.png
+│   │   ├── play.png
+│   │   └── stop.png
+│   └── keymaps/
+│       ├── default.map
+│       └── flashpiano.map
+│
+└── docs/
+    ├── kps-format-spec.md
+    └── build.md
+
+
+二、核心接口设计
+================================================================================
+
+【MidiEvent】POD：{ EventType type; uint8_t chan; uint8_t note; uint8_t vel;
+  int64_t ts_us; }。x64 上因 int64_t 的 8 字节对齐，结构实际大小为 16 字节
+  （含 4 字节 padding），不是 12 —— static_assert 应为 sizeof==16。ts_us 必须
+  保持 int64_t（int32 约 35 分钟即溢出）。
+
+【AudioEngine】
+  // 注意：Stats 实现为 keypiano::audio 命名空间下的独立 struct，而非嵌套的
+  // AudioEngine::Stats —— CallbackContext 需在 AudioEngine 定义前引用它。
+  class AudioEngine {
+  public:
+      struct Config {
+          uint32_t sample_rate = 44100;
+          uint32_t buffer_frames = 256;   // 约 5.8ms @ 44100Hz
+          std::string device_name;        // 空 = 默认设备
+      };
+
+      // synth 非拥有，须存活至 engine 关闭；open() 内按协商后的 buffer_frames
+      // 调 synth->init()。.sf2 由调用方在 open() 后自行 loadInstrument()。
+      bool open(const Config& cfg, SynthesizerBase* synth);
+      void close();
+      bool isOpen() const;
+
+      // 任意线程安全调用，写入无锁 event_queue（队列满则丢弃，绝不阻塞）
+      void postNoteOn(uint8_t ch, uint8_t note, uint8_t vel);
+      void postNoteOff(uint8_t ch, uint8_t note);
+      void postControlChange(uint8_t ch, uint8_t cc, uint8_t val);
+      void postAllNotesOff(uint8_t ch);
+
+      // UI 线程消费 feedback_queue（音频线程发布的音符活动）
+      bool popFeedback(MidiEvent& out);
+
+      const Stats& stats() const;
+      uint32_t bufferFrames() const;  // open() 后 RtAudio 协商的真实值
+  };
+
+  // 命名空间级 struct（见上方注释）
+  struct Stats {
+      std::atomic<uint32_t> buffer_underruns{0};
+      std::atomic<double>   cpu_load{0.0};
+      std::atomic<uint32_t> latency_us{0};
+  };
+
+【SynthesizerBase】
+  class SynthesizerBase {
+  public:
+      virtual bool init(uint32_t sample_rate, uint32_t max_frames) = 0;
+      virtual void noteOn(uint8_t ch, uint8_t note, uint8_t vel) = 0;
+      virtual void noteOff(uint8_t ch, uint8_t note) = 0;
+      virtual void controlChange(uint8_t ch, uint8_t cc, uint8_t val) = 0;
+      virtual void allNotesOff() = 0;
+      virtual void render(float* out, uint32_t frames) = 0;  // 混入，不覆盖
+      virtual bool loadInstrument(const std::string& path) = 0;
+      virtual void shutdown() = 0;
+  };
+
+【KeyMap】
+  struct KeyBinding {
+      uint32_t  vk_code;      // Windows VK_* 虚拟键码
+      KeyAction action;       // Note / OctaveInc / VelocityInc / Record / ...
+      uint8_t   channel;      // 0 = In_0, 1 = In_1
+      uint8_t   midi_note;    // 0-127，仅 action==Note 时有效
+      int8_t    step;         // Inc/Dec 步长
+      std::string label;      // 显示在按键上的文字
+  };
+
+  struct ChannelState {
+      int8_t  octave_offset = 0;  // -4 ~ +4
+      uint8_t velocity = 80;
+      uint8_t sustain = 127;
+  };
+
+  class KeyMap {
+  public:
+      // 查询：给定 VK 码，返回应触发的 MIDI 事件（含 octave/key signature 折算）
+      std::optional<MidiEvent> resolve(uint32_t vk_code, bool is_keydown,
+                                       const ChannelState& ch0, const ChannelState& ch1) const;
+      std::string name;
+      int8_t  key_signature = 0;  // 全局移调 -6~+6 半音
+  };
+
+【KeyboardHook】
+  struct KeyEvent {
+      uint32_t vk_code;
+      uint32_t scan_code;
+      bool     is_keydown;
+      bool     is_extended;
+  };
+
+  class KeyboardHook {
+  public:
+      virtual bool install(std::function<void(const KeyEvent&)> cb) = 0;
+      virtual void uninstall() = 0;
+      static std::unique_ptr<KeyboardHook> create();  // 工厂
+  };
+
+【Recorder】
+  enum class RecorderState { Idle, Recording, Playing };
+
+  class Recorder {
+  public:
+      void startRecording();
+      void stopRecording();
+      void startPlayback(std::function<void(const MidiEvent&)> cb);
+      void stopPlayback();
+      void onMidiEvent(const MidiEvent& ev, uint64_t timestamp_us);  // 音频线程调用
+      RecorderState state() const;
+      bool saveToFile(const std::string& path) const;
+      bool loadFromFile(const std::string& path);
+  };
+
+
+三、线程模型
+================================================================================
+
+  Hook Thread（Win32 消息循环线程）
+    - SetWindowsHookExW(WH_KEYBOARD_LL)
+    - GetMessage + DispatchMessage 循环
+    - 回调中：查 KeyMap（O(1)）→ 写 event_queue
+    - 回调必须在 300ms 内返回，只做查表+入队
+
+  Audio Thread（RtAudio WASAPI 回调线程）
+    - 每帧 drain event_queue
+    - Recorder::onMidiEvent（录制时记录）
+    - SynthesizerBase::noteOn/noteOff/render
+    - 写 feedback_queue（音符触发 → 通知 UI 高亮）
+
+  UI Thread（Qt 主线程）
+    - QApplication::exec()
+    - MainWindow、PianoWidget、Dialogs
+    - AudioBridge QTimer 16ms 轮询 feedback_queue → emit Qt signals
+    - 调用 AudioEngine::post*() 写 event_queue
+
+  队列类型：
+    event_queue（UI+Hook → Audio）：MPSC 无锁队列，容量 1024
+    feedback_queue（Audio → UI）：SPSC 无锁队列，容量 256
+
+  铁律：
+    音频线程禁止 malloc/new、禁止可等待 mutex、禁止 Qt 调用、禁止文件 I/O
+    Hook 线程回调只做最小工作（查表+入队）
+
+
+四、vcpkg.json
+================================================================================
+
+  {
+    "name": "keypiano",
+    "version": "1.0.0",
+    "license": "GPL-3.0-only",
+    "dependencies": [
+      { "name": "qtbase", "features": ["widgets"] },
+      { "name": "fluidsynth", "version>=": "2.3.1" },
+      { "name": "rtaudio",    "version>=": "6.0.1" },
+      { "name": "gtest",      "version>=": "1.14.0" }
+    ]
+  }
+
+  注意（2026-06-14 实测修正）：
+  - Qt6 在 vcpkg 中的 port 名是 "qtbase"，不是 "qt6-base"。
+  - rtaudio 没有 "wasapi" feature；WASAPI 在 Windows 上默认编入，无需开关。
+  - version>= 的版本号必须在 versions db 中真实存在（fluidsynth 最低 2.3.1，
+    rtaudio 最低 6.0.1），不能填语义更低但不存在的号（如 2.3.0 / 6.0.0）。
+  - baseline 统一写在 vcpkg-configuration.json 的 default-registry，不要同时
+    在 vcpkg.json 放 builtin-baseline（会告警，后者会被前者覆盖）。
+
+  VST2 SDK 不通过 vcpkg 分发：
+  - 开发者手动下载 vstsdk2.x 放到本地目录
+  - cmake -DVST2_SDK_PATH=<路径> 指定
+  - cmake/FindVST2.cmake 负责查找
+
+
+五、CMakePresets 预设
+================================================================================
+
+  windows-debug        /W4 /WX /utf-8 /MP，启用测试，Debug 模式
+  windows-release      /O2 /GL /LTCG，关闭测试，Release 模式
+  windows-relwithdebinfo  Release 优化 + 调试信息
+
+  CMake 目标结构：
+    keypiano_core (STATIC)  ← core/ 所有代码，不链接 Qt
+    keypiano_ui   (STATIC)  ← ui/ 所有代码，链接 Qt6::Widgets + keypiano_core
+    keypiano      (WIN32 EXE) ← main.cpp，链接 keypiano_ui + keypiano_core
+    keypiano_tests ← 仅 KEYPIANO_ENABLE_TESTS=ON 时构建
+
+  Post-build 自动运行 windeployqt 部署 Qt DLL
+
+
+六、PianoWidget 绘制说明
+================================================================================
+
+  - 88 键（A0 到 C8，MIDI 21-108）
+  - 白键：52 个，宽度 = widget_width / 52，高度 = widget_height
+  - 黑键：覆盖相邻白键间隙，高度 60%，宽度 55% 白键宽
+  - 正常白键：白色，边框灰色
+  - 正常黑键：黑色
+  - 按下白键：浅蓝色（#6BB5FF）
+  - 按下黑键：深蓝色（#2255AA）
+  - 松开后：0.1s 淡出动画（QTimer 16ms tick，alpha 递减）
+  - 鼠标点击也能发声（支持鼠标弹琴模式）
+  - 每个键可叠加显示 label（键位名或音符名）
+
+
+七、.map 解析的两套语法对照
+================================================================================
+
+  版本标识（第一行）：
+    FreePiano 2.0  →  使用 2.0 语法
+    FreePiano 2.1  →  使用 2.1 语法
+    keypiano 1.0   →  使用 keypiano 扩展语法（暂不实现）
+
+  2.0 特殊处：
+    - 键名全小写（key a，key tab，key caps，key f5）
+    - 通道用数字（NoteOn 0 c2，NoteOn 1 d3）
+    - 音符用小写加数字（c2，d#3，f#4）
+    - 拼写错误需兼容：KeyboardVeolcity（少了一个 c）
+    - 全局初始值行：Sustain 0 Set 127 / Velocity 0 Set 100
+
+  2.1 特殊处：
+    - 键名 PascalCase（Keydown A，Keydown F5，Keydown ScrollLock）
+    - 通道用 In_0/In_1
+    - 音符用大写（C4，Eb3，F#5）
+    - 功能键：Octave、Velocity、Group、KeySignature、Sustain
+    - 元数据行：GroupCount、Group Set、KeySignature Set
+
+
+八、各阶段验收标准
+================================================================================
+
+  Phase 1：
+    cmake --preset windows-debug && cmake --build build/windows-debug
+    ctest --preset test-debug
+    运行可执行文件，加载 freepiano.cfg，按键有声音，LatencyMon 确认 < 20ms
+
+  Phase 2：
+    录制演奏 → 保存 .kps → 重新加载 → 回放节奏与原始演奏一致
+
+  Phase 3：
+    按键时 PianoWidget 对应音符高亮，松开后 0.1s 内淡出
+    设置对话框能切换 SF2 文件和 keymap
+
+  Phase 4：
+    加载 mdaPiano.dll（vsti/ 目录），切换音色后按键正常发声
+    windeployqt 打包后，在无 Qt 安装的机器上运行正常

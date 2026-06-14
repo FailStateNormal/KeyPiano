@@ -1,0 +1,24 @@
+---
+BasedOnStyle: Google
+Standard: c++20
+ColumnLimit: 120
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+SortIncludes: CaseInsensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"'
+    Priority: 1
+  - Regex: '^<Qt'
+    Priority: 2
+  - Regex: '^<'
+    Priority: 3
+SpacesInParentheses: false
+SpaceAfterCStyleCast: false
+PointerAlignment: Left
+...

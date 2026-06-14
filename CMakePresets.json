@@ -1,0 +1,108 @@
+{
+    "version": 6,
+    "configurePresets": [
+        {
+            "name": "windows-base",
+            "hidden": true,
+            "generator": "Visual Studio 17 2022",
+            "architecture": "x64",
+            "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+            "environment": {
+                "VCPKG_FEATURE_FLAGS": "manifests"
+            },
+            "cacheVariables": {
+                "VCPKG_TARGET_TRIPLET": "x64-windows"
+            }
+        },
+        {
+            "name": "windows-debug",
+            "displayName": "Windows Debug",
+            "description": "Debug build — tests enabled, GUI disabled (Phase 1)",
+            "inherits": "windows-base",
+            "binaryDir": "${sourceDir}/build/windows-debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "KEYPIANO_ENABLE_TESTS": "ON",
+                "KEYPIANO_ENABLE_GUI": "OFF",
+                "VCPKG_MANIFEST_FEATURES": "tests"
+            }
+        },
+        {
+            "name": "windows-gui-debug",
+            "displayName": "Windows GUI Debug",
+            "description": "Debug build with Qt GUI — Phase 3+ development",
+            "inherits": "windows-base",
+            "binaryDir": "${sourceDir}/build/windows-gui-debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "KEYPIANO_ENABLE_TESTS": "OFF",
+                "KEYPIANO_ENABLE_GUI": "ON",
+                "VCPKG_MANIFEST_FEATURES": "gui;vst3"
+            }
+        },
+        {
+            "name": "windows-release",
+            "displayName": "Windows Release",
+            "description": "Optimised release build with Qt GUI",
+            "inherits": "windows-base",
+            "binaryDir": "${sourceDir}/build/windows-release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "KEYPIANO_ENABLE_TESTS": "OFF",
+                "KEYPIANO_ENABLE_GUI": "ON",
+                "VCPKG_MANIFEST_FEATURES": "gui;vst3"
+            }
+        },
+        {
+            "name": "windows-relwithdebinfo",
+            "displayName": "Windows RelWithDebInfo",
+            "description": "Release optimisations with debug info",
+            "inherits": "windows-base",
+            "binaryDir": "${sourceDir}/build/windows-relwithdebinfo",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "KEYPIANO_ENABLE_TESTS": "OFF",
+                "KEYPIANO_ENABLE_GUI": "ON",
+                "VCPKG_MANIFEST_FEATURES": "gui;vst3"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "windows-debug",
+            "displayName": "Build Debug",
+            "configurePreset": "windows-debug",
+            "configuration": "Debug"
+        },
+        {
+            "name": "windows-gui-debug",
+            "displayName": "Build GUI Debug",
+            "configurePreset": "windows-gui-debug",
+            "configuration": "Debug"
+        },
+        {
+            "name": "windows-release",
+            "displayName": "Build Release",
+            "configurePreset": "windows-release",
+            "configuration": "Release"
+        },
+        {
+            "name": "windows-relwithdebinfo",
+            "displayName": "Build RelWithDebInfo",
+            "configurePreset": "windows-relwithdebinfo",
+            "configuration": "RelWithDebInfo"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "test-debug",
+            "displayName": "Run Tests (Debug)",
+            "configurePreset": "windows-debug",
+            "configuration": "Debug",
+            "output": {
+                "outputOnFailure": true,
+                "verbosity": "default"
+            }
+        }
+    ]
+}

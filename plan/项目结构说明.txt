@@ -1,0 +1,184 @@
+================================================================================
+  keypiano 项目结构说明
+  （Phase 1-4 全部完成后的最终版 · 2026-06-14 重写）
+================================================================================
+
+keypiano 是一个用 C++20 从零重写的 Windows 虚拟钢琴：把电脑键盘变成可演奏的
+乐器，支持低延迟 SoundFont（SF2）合成、演奏录制/回放、Qt6 图形界面，以及 VST3
+乐器插件宿主（含插件自带编辑器窗口）。GPL v3，独立项目（键位 .map 格式兼容
+FreePiano，但不共享代码）。
+
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ 一、顶层目录                                                                │
+└──────────────────────────────────────────────────────────────────────────┘
+
+keypiano/
+├── CMakeLists.txt          根构建脚本：编译选项、可执行文件、VST3 检测、Qt 部署
+├── CMakePresets.json       构建预设（debug / gui-debug / release / relwithdebinfo）
+├── vcpkg.json              依赖清单（manifest 模式）+ feature（tests/gui/vst3）
+├── vcpkg-configuration.json 依赖 baseline（锁定 vcpkg 版本，保证可复现）
+├── .clang-format           代码风格
+├── LICENSE                 GPL v3 全文
+├── README.md               项目简介、状态、构建快速上手
+│
+├── src/                    全部源码（见第二节）
+│   ├── main.cpp            程序入口（创建 QApplication + MainWindow）
+│   ├── core/               纯 C++ 核心库 keypiano_core（零 Qt 依赖）
+│   └── ui/                 Qt6 GUI 库 keypiano_ui（依赖 core）
+│
+├── resources/              GUI 资源（编译进 exe）
+│   ├── keypiano.qrc        Qt 资源清单（图标 + 内置键位图）
+│   ├── icons/              应用图标(app.png/ico) + 工具栏图标(record/play/stop.png)
+│   │   └── gen_toolbar_icons.py  用 PIL 生成工具栏 PNG 的脚本
+│   └── keymaps/default.map 内置默认键位（FreePiano 格式，启动时加载）
+│
+├── third_party/
+│   └── vst3_hosting/       从 VST3 SDK 摘出的模块加载器（module.cpp/module_win32.cpp）
+│                           —— vcpkg 的 vst3sdk 端口没编进这两个文件，必须自带（GPLv3）
+│
+├── cmake/
+│   └── Vst3.cmake          手动定位 VST3 SDK，建 keypiano::vst3 导入目标
+│
+├── tests/                  GoogleTest 单元测试（5 个文件，共 72 个用例）
+├── docs/                   build.md（构建/部署/VST3 说明）、kps-format-spec.md（录制格式）
+└── plan/                   计划文档（本文件所在）：TASKS.md / PLAN_DETAIL.txt 等
+
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ 二、源码模块（src/）                                                        │
+└──────────────────────────────────────────────────────────────────────────┘
+
+【src/core/ —— 核心库 keypiano_core，纯 C++20，不依赖 Qt】
+
+  audio/                    音频引擎与实时回调
+    LockFreeQueue.h         无锁 SPSC/MPSC 环形队列（线程间传 MIDI 事件，零阻塞）
+    MidiEvent.h             MIDI 事件 POD（NoteOn/NoteOff/CC/AllNotesOff）
+    AudioEngine.{h,cpp}     RtAudio(WASAPI) 封装：开/关音频流、事件队列、统计
+    AudioCallback.{h,cpp}   实时音频回调：排空事件队列→驱动合成器→render→回灌 UI
+                            ★音频线程铁律：零 malloc / 零锁 / 零 Qt / 零文件 IO
+
+  synth/                    合成器后端（可插拔）
+    SynthesizerBase.h       抽象接口：init/shutdown/loadInstrument/noteOn/noteOff/
+                            controlChange/allNotesOff/render（所有后端统一实现）
+    FluidSynthEngine.{h,cpp} 默认后端：FluidSynth 加载 .sf2 软件合成
+    Vst3SynthEngine.{h,cpp} VST3 后端：用 VST3 SDK 宿主 .vst3 乐器插件（pimpl 隐藏 SDK）
+    IPluginEditor.h         插件编辑器跨层接口（不含 SDK/Qt 类型；UI 用 dynamic_cast 探测）
+                            —— Vst3SynthEngine 额外实现它，暴露"打开插件 GUI"能力
+    SynthFactory.{h,cpp}    工厂：createFluidSynth() / createVst3Synth()
+
+  keymap/                   键位映射（FreePiano .map 兼容）
+    KeyMap.{h,cpp}          虚拟键码 → MIDI 音符/控制的映射表 + 标签
+    KeyMapParser.{h,cpp}    解析 FreePiano 2.0/2.1 .map 文本
+    KeyMapSerializer.{h,cpp} 把 KeyMap 写回 .map 文本
+
+  recorder/                 录制 / 回放
+    KpsFormat.{h,cpp}       .kps 文本格式读写（Git 友好、微秒精度，见 docs 规范）
+    Recorder.{h,cpp}        录制（预分配缓冲，回调内零 malloc）+ 独立线程定时回放
+
+  config/                   配置文件
+    AppConfig.{h,cpp}       应用配置模型
+    CfgParser.{h,cpp}       配置文本解析
+
+  platform/                 平台相关
+    KeyboardHook.h          键盘钩子抽象接口
+    win32/Win32KeyboardHook.{h,cpp}  Win32 WH_KEYBOARD_LL 全局低级键盘钩子
+
+  core_placeholder.cpp      P1-A 占位（可忽略）
+
+
+【src/ui/ —— GUI 库 keypiano_ui，Qt6 Widgets，依赖 core】
+
+  MainWindow.{h,cpp,ui}     主窗口：菜单/工具栏/状态栏、引擎装配、后端切换、
+                            录放控制、键位加载、打开 SF2 / VST3 / 插件编辑器
+  bridge/AudioBridge.{h,cpp} 音频↔UI 桥：定时(16ms)轮询反馈队列，发 Qt 信号高亮琴键
+                            —— 这是音频线程与 Qt 线程之间唯一的安全通道
+
+  widgets/
+    PianoWidget.{h,cpp}             88 键钢琴控件（QPainter 自绘 + 鼠标演奏）
+    KeyboardOverlayWidget.{h,cpp}   透明叠层：在琴键上画键位字母标签
+    Vst3EditorWindow.{h,cpp}        承载 VST3 插件自带编辑器 GUI 的窗口
+                                    （原生子窗口拿 HWND 给插件 attach，处理 resize）
+
+  dialogs/
+    SoundFontDialog.{h,cpp}    选 .sf2（带最近文件列表）
+    KeyMapEditorDialog.{h,cpp} 表格编辑键位标签
+    SettingsDialog.{h,cpp}     选 WASAPI 输出设备 / 采样率 / 缓冲大小
+
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ 三、运行时架构（三线程，靠无锁队列通信，永不阻塞音频）                       │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  ┌───────────────┐   按键事件    ┌────────────────┐   render   ┌─────────┐
+  │ 钩子线程       │ ───────────▶ │ 音频线程        │ ─────────▶ │ 声卡     │
+  │ Win32 低级钩子 │  event_queue │ WASAPI 回调     │            │ (WASAPI)│
+  │ 查键位→MIDI    │ (无锁SPSC)   │ 排空队列→合成器  │            └─────────┘
+  └───────────────┘              │ →render→反馈     │
+                                 └────────────────┘
+  ┌───────────────┐  鼠标/菜单     │ feedback_queue (无锁)
+  │ UI 线程(Qt)    │ ─────────────┘        │
+  │ 钢琴控件/对话框 │ ◀─────────────────────┘  AudioBridge 每 16ms 轮询 → 高亮琴键
+  └───────────────┘
+
+  数据流：
+   • 物理按键 → 钩子线程查 KeyMap → MidiEvent 入 event_queue
+   • 鼠标点琴键 / 回放线程 → 同样 post 到 event_queue（统一入口）
+   • 音频回调排空 event_queue → 调 synth（FluidSynth 或 VST3）→ render 出声
+     → 把发声事件 push 到 feedback_queue
+   • AudioBridge（UI 线程定时器）读 feedback_queue → 发信号 → PianoWidget 高亮
+
+  铁律：音频回调内绝不 new/malloc、不加锁、不调 Qt、不读写文件。
+        装载乐器/开关引擎等重活只在非音频线程做。
+
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ 四、合成器后端切换                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  两个后端都实现 SynthesizerBase，MainWindow 持有 std::unique_ptr<SynthesizerBase>：
+   • 打开 SF2  → 切到 FluidSynthEngine，restartEngine 用新后端重开音频流
+   • 打开 VST3 → 切到 Vst3SynthEngine，加载 .vst3 bundle
+   • 切换后端前会先关掉插件编辑器窗口（它引用着旧后端，避免悬空）
+  Vst3SynthEngine 还额外实现 IPluginEditor，所以 VST3 后端能弹出插件自己的界面。
+
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ 五、构建预设（CMakePresets.json）                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  windows-debug          headless 核心 + 单元测试（无 GUI / 无 VST3）→ ctest 用
+  windows-gui-debug      Debug + GUI + VST3（日常开发调试）
+  windows-release        Release(/O2 /GL /LTCG) + GUI + VST3（发布，自包含产物）
+  windows-relwithdebinfo Release 优化 + 调试信息
+
+  官方构建三连（需先 vcvars64 + 设 VCPKG_ROOT=C:\vcpkg）：
+    cmake --preset windows-debug
+    cmake --build --preset windows-debug
+    ctest --preset test-debug          → 72/72
+
+  发布构建：
+    cmake --preset windows-release
+    cmake --build --preset windows-release
+    产物在 build/windows-release/Release/，含 exe + 所有运行时 DLL + Qt 插件，
+    在没有 Qt/vcpkg/VS 的机器上可直接运行（CMake post-build 自动部署 Qt 插件）。
+
+  依赖（由 vcpkg 按 feature 自动装，无需手动）：
+    核心  FluidSynth, RtAudio        （always）
+    tests GoogleTest                  （windows-debug）
+    gui   Qt6 (qtbase+widgets)        （三个 GUI 预设）
+    vst3  Steinberg VST3 SDK          （三个 GUI 预设；走 GPLv3 分支，无需手动下 SDK）
+
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ 六、验收状态（截至 2026-06-14）                                             │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  Phase 1 核心引擎（能响）   ✅  41/41 + 出声 + 延迟 ~5.8ms
+  Phase 2 录制回放           ✅  72/72 + 端到端小星星往返
+  Phase 3 Qt GUI             ✅  钢琴控件/叠层/对话框/资源
+  Phase 4 VST3 + 打包        ✅  宿主(P4-A) + 编辑器窗口(P4-B) + 自包含打包(P4-C)
+                                 真实插件验证：Surge XT 编辑器 1141x711 嵌入成功 + 发声
+
+  这是计划的最后阶段，项目按规划整体完成。
+================================================================================

@@ -146,6 +146,12 @@ private:
         return cc == 64 ? 0 : cc == 66 ? 1 : cc == 67 ? 2 : -1;
     }
 
+    // Apply the soft pedal to a note velocity: when the soft pedal is engaged,
+    // scale `vel` down (una corda). Used by both the keyboard and mouse paths so
+    // clicking the on-screen keys is softened too. Returns vel unchanged if soft
+    // is not engaged.
+    uint8_t softVelocity(int vel) const;
+
     // Set just before startRecording() so the hook thread can compute ts_us
     // for each captured event (happens-before guaranteed via atomic state_).
     std::chrono::steady_clock::time_point record_start_{};

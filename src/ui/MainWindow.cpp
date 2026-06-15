@@ -316,6 +316,17 @@ void MainWindow::installHook() {
     }
 }
 
+uint8_t MainWindow::softVelocity(int vel) const {
+    // When the soft pedal is engaged, scale velocity to 55%. With the default
+    // SF2's steep velocity→loudness curve this lands around 30% of full loudness
+    // — a clear una corda, ~2.5x louder than the earlier 35% setting (which was
+    // too quiet) but still distinctly softer than normal.
+    if (!pedal_engaged_[2].load(std::memory_order_relaxed))
+        return static_cast<uint8_t>(vel);
+    int v = vel * 55 / 100;
+    return static_cast<uint8_t>(v < 1 ? 1 : v);
+}
+
 void MainWindow::handleKeyboardEvent(const KeyEvent& kev) {
     // Rebind capture: if a piano key is waiting for a physical key, the controller
     // grabs this keydown (marshalling to the UI thread) instead of playing a note.
@@ -362,14 +373,9 @@ void MainWindow::handleKeyboardEvent(const KeyEvent& kev) {
         // effect is applied below as a velocity reduction on new notes.
     }
 
-    // Soft pedal (engaged) softens new notes, since the synth does not. ~35% of
-    // the original velocity — close to a real una corda and clearly audible (the
-    // default SF2 has a steep velocity→loudness curve, so 60% was too subtle).
-    if (ev.type == EventType::NoteOn &&
-        pedal_engaged_[2].load(std::memory_order_relaxed)) {
-        int v = ev.vel * 35 / 100;
-        ev.vel = static_cast<uint8_t>(v < 1 ? 1 : v);
-    }
+    // Soft pedal (engaged) softens new notes, since the synth does not.
+    if (ev.type == EventType::NoteOn)
+        ev.vel = softVelocity(ev.vel);
 
     if (recorder_ && recorder_->state() == Recorder::State::Recording) {
         using namespace std::chrono;
@@ -465,7 +471,7 @@ void MainWindow::startEngine(const audio::AudioEngine::Config& cfg) {
                 this, [this](int midi, int vel) {
                     engine_->postNoteOn(0,
                         static_cast<uint8_t>(midi),
-                        static_cast<uint8_t>(vel));
+                        softVelocity(vel));  // soft pedal applies to clicks too
                 });
         connect(piano_widget_, &PianoWidget::mouseNoteOff,
                 this, [this](int midi) {
@@ -499,7 +505,7 @@ void MainWindow::setupPianoWidget() {
                 this, [this](int midi, int vel) {
                     engine_->postNoteOn(0,
                         static_cast<uint8_t>(midi),
-                        static_cast<uint8_t>(vel));
+                        softVelocity(vel));  // soft pedal applies to clicks too
                 });
         connect(piano_widget_, &PianoWidget::mouseNoteOff,
                 this, [this](int midi) {

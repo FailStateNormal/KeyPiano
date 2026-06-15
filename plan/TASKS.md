@@ -345,9 +345,21 @@
       时间常数拉长（基频 tau 1.3→2.8s）、时长 2.5→3.5s。验收：`.verify/sf2_decay_check.cpp`（gain=0.5）
       实测 **peak 0.063→0.158**、rms@2s=0.051 清晰可闻。重建 gui-debug+release，重打 `Desktop\keypiano-win64.zip`(40.6MB)。
 
-### P5-B  Surge/VST3 音色选择引导（可选）⬜
-- [ ] 用户反馈 Surge 界面看不懂（那是插件自己的 GUI）。可在 docs 或 README 加"如何在 Surge
-      Patch Browser 选钢琴音色"的简短说明；或长远做插件内 program 下拉。
+### P5-B  使用说明 + 中英文切换（2026-06-15）✅
+- [x] **Help 菜单**：新增 `setupHelpMenu()`。"Usage Guide"(F1) 弹 QDialog+QTextBrowser，
+      内嵌中英双语 HTML 使用说明，**含"如何自行下载并使用 VST3 插件"**（Surge XT 等，本程序不附带插件，
+      引导到标准 VST3 目录 + Show Plugin Editor 选音色）+ 基础弹奏/换音色/重绑/录制/设置。
+      "About keypiano" 关于框（双语）。
+- [x] **中英文切换**：Help → Language（English / 简体中文，radio）。因 vcpkg Qt **不带 lrelease/lupdate**
+      （无法生成 .qm），改用自包含方案：`src/ui/I18n.h/.cpp` 子类化 `QTranslator`，内嵌英→中映射表
+      （override `translate()` 按源文本查表、`isEmpty()` 返回 false 强制生效）。`installTranslator`/
+      `removeTranslator` 切换 → 触发 `QEvent::LanguageChange` → `MainWindow::changeEvent` →
+      `retranslateUi()` 重设所有代码内菜单/动作/工具栏/状态标签文本。按需创建的对话框
+      （SoundFont/Settings/KeyMap/录制提示）因构造时 tr() 即被翻译，自动跟随当前语言。
+      语言选择存 QSettings(`keypiano/keypiano/language`=en|zh)，下次启动 `loadLanguageSetting()` 恢复。
+- [x] 配套：状态栏乐器名抽成 `refreshSf2Label()`（统一翻译"(built-in)"后缀）；菜单/工具栏指针提升为成员。
+- [x] 验收：windows-gui-debug 构建 `/W4 /WX` 干净；中、英两种语言启动均不崩；headless **72/72** 仍过。
+      **未做人工 GUI 实测切换观感**（待用户跑）。
 
 ### P5-C  键位方案（map 预设）保存/删除/切换（2026-06-15）✅
 - [x] 菜单 File → "Keymap Presets" 子菜单：动态列出 `%APPDATA%\keypiano\presets\*.map`（点击即加载并设为当前），
@@ -355,20 +367,63 @@
       + "Delete Preset..."（QInputDialog 列表选择 + 确认）。复用 KeyMapSerializer/KeyMapParser。
       加载预设后 saveUserKeymap() 写 user.map，重启后保持。验收：gui-debug 构建通过。
 
-### P6  三踏板模拟（待做）⬜
-> 目的：模拟真实钢琴的三个踏板，绑定到键盘按键（如 FreePiano 的 Sustain/Sostenuto/Soft）。
-> 音频路径涉及 MIDI CC + 发音逻辑，建议 Opus 4.8。
-- [ ] **延音踏板 Sustain（CC64）**：已有 `KeyAction::SustainSet` + `Space` 绑定基础。现状是布尔式
-      Set 0/127 写 ChannelState.sustain，但**未实际接到 FluidSynth 的 CC64**——需确认 noteOff 在踏板
-      按住时是否被正确延迟（真延音是松键不停声、抬踏板才停）。要把 sustain 真正经 controlChange(64) 下发，
-      由合成器/发音逻辑处理延音，而非仅记状态。
-- [ ] **柔音踏板 Soft / una corda（CC67）**：按下降低力度/音量。映射一个按键 → controlChange(67)。
-- [ ] **持音踏板 Sostenuto（CC66）**：只延音"按下踏板那一刻正在按的音"，后续音符不延。逻辑最复杂，
-      需在发音层快照当前按下音集合。FluidSynth 是否原生支持 CC66 需查证，否则要在 keypiano 层模拟。
-- [ ] KeyMap 扩展：新增 KeyAction（SostenutoSet / SoftSet）或统一用 controlChange 绑定；KeyMapParser/
-      Serializer 同步；默认 map 给三踏板留按键。UI：踏板状态可在 PianoWidget 下方加三个指示灯（可选）。
-- [ ] 单元测试：踏板 CC 下发、Sostenuto 音集快照、延音期间 noteOff 行为。
-- [ ] 验收：headless 测试全过 + 人工实测踩踏板手感（延音、柔音、持音三者听感正确）。
+### P6  三踏板模拟（2026-06-15，Opus 4.8）✅
+> 关键设计：踏板**不在 keypiano 层模拟**，而是解析成标准 MIDI CC 事件，交由 FluidSynth 原生处理
+> （CC64 sustain / CC66 sostenuto / CC67 soft 全部原生支持）。踩下=CC127、松开=CC0，**momentary**
+> （按住即踩、松开即抬，像真踏板）。这是最稳路径：复用现有 `controlChange→fluid_synth_cc`。
+- [x] **三个新 KeyAction**：`SustainPedal`(CC64) / `SostenutoPedal`(CC66) / `SoftPedal`(CC67)（KeyMap.h）。
+      保留旧 `SustainSet`（latch，仅记状态）兼容老 map。
+- [x] **KeyMap::resolve 处理踏板**：两个边沿都产 `ControlChange`——keydown→{note=cc, vel=127}、
+      keyup→{vel=0}。八度/调号不作用于踏板（通道级控制）。**MainWindow 无需改**：installHook 已有
+      `case ControlChange → postControlChange`，录制回放 `makeAudioDispatch` 也已转发 CC。
+- [x] **关键前提已具备**：Win32 钩子已过滤 OS 自动重复（前沿 keydown+配对 keyup），所以踏板按一次=一个
+      CC127、松一次=一个 CC0；CC66 sostenuto 只在按下瞬间快照一次（不会因重复 keydown 反复抓取）。
+- [x] **Parser/Serializer**：新增 `SustainPedal`/`Sostenuto`/`Soft`(`SoftPedal`) 关键字（2.0+2.1 同分支），
+      语法 `Keydown <key> SustainPedal <In_0|In_1>`；序列化补三个 case（/WX 下 switch 必须全覆盖）。
+- [x] **默认 map**：`Space`→SustainPedal、`F3`→Sostenuto、`F4`→Soft（momentary，按住生效），更新头注释。
+- [x] **单元测试**：解析三踏板动作、缺通道报错、resolve down/up 产正确 CC(64/127→0)、CC66/67 编号、
+      序列化往返。**77/77 全过**（原 72 + 5 新）。
+- [x] **离线发声验证**：`.verify/pedal_check.cpp`（cl+vcpkg libfluidsynth-3）对比松键后 0.6-0.7s 余音
+      RMS——**不踩 0.00000 / 踩下 0.07336**，证明 CC64 确实延迟 noteOff 让音延续。VST3 后端 CC 仍为
+      no-op（与既有限制一致，延后）。
+- [x] 文档：使用说明（中英）补踏板用法；windows-gui-debug 构建干净、冒烟启动加载新 default.map 不崩。
+- [ ] （可选未做）PianoWidget 下方三个踏板指示灯 + 人工实测踩踏板手感（待用户跑）。
+
+---
+
+## Phase 7 — 健壮性与功能闭环（2026-06-15，Opus 4.8，按用户架构审查）✅
+> 用户给了一份分层审查。只做"真风险 + 功能闭环 + 最安全的结构整理"，压住过度抽象，每步可编译可测可回退。
+
+### P7-1  线程安全：keymap 快照（消除 data race）✅
+- [x] **根因**：hook 线程在 `resolve()` 里读 `keymap_`，UI 线程在 load/edit/rebind/preset 时 `std::move`
+      重写它 → 并发读+重写 vector/unordered_map 是 UB。
+- [x] **修法**：`MainWindow` 加 `std::atomic<std::shared_ptr<const KeyMap>> keymap_ptr_`。UI 线程保留可变
+      `keymap_` 工作副本，每次改动后 `publishKeymap()` 存一份不可变快照；hook 线程 `keymap_ptr_.load()`
+      读快照调 `handle()`。所有 keymap 变更收口到 `setActiveKeymap()`（load/edit/preset/open）+ applyRebind
+      后 publishKeymap（顺带去重 overlay/enable 样板）。
+- [x] **附带修一个 UAF**：`stopEngine()` 原先先 reset `recorder_` 再 uninstall hook → hook 回调正用着
+      recorder_ 就被释放。改为**先 uninstall hook（join 线程）再拆 bridge/recorder/engine**。
+
+### P7-2  KeyAction 功能闭环（八度/力度/调号/Record 真正生效）✅
+- [x] **根因**：parser/serializer 早支持这些动作，但执行层 `resolve()` 对非 Note 返回 nullopt、hook 直接丢
+      → 默认 map 的 F1/F2 八度、velocity **从来没生效过**（界面承诺但实际没有）。
+- [x] `KeyMap::handle(vk, down, ch0&, ch1&)` 新入口返回 `KeyResult{optional<MidiEvent> midi; bool toggle_record}`：
+      Note/踏板→委托 resolve；Octave/Velocity/KeySignature→就地改 ChannelState；Record→toggle_record；
+      旧 `SustainSet`→keydown 发 CC64=step（兼容老 map）。`*this` 不改，可在快照上安全调。
+- [x] **clamp 集中**：ChannelState 加 `shiftOctave[-4,4]/shiftVelocity[1,127]/setVelocityValue/
+      shiftKeySignature[-6,6]`，唯一限幅处，调用方不再散落 clamp。
+- [x] hook 改用 `handle()`；Record 命令经 `QMetaObject::invokeMethod` queued 回 UI 线程
+      `toggleRecordFromHotkey()`（复用 onStartRecording/onStop）。原大 lambda 抽成 `handleKeyboardEvent()`。
+- [x] 测试 +5：八度位移改音高、力度位移改 NoteOn vel、Record 仅 keydown 触发、旧 SustainSet 发 CC64、
+      ChannelState 三项 clamp。**headless 82/82**（72→77→82）。
+
+### P7-3  结构整理（只做最安全一块）✅
+- [x] **HelpContent 拆出**：使用说明 HTML 从 MainWindow.cpp 移到 `src/ui/HelpContent.h/.cpp`
+      （`keypiano::ui::usageGuideHtmlEn/Zh`），MainWindow 瘦约 90 行。
+- [x] **VST3 诚实**：使用说明（中英）补一句"踏板/CC 目前仅 SF2 引擎生效，VST3 暂不下发"。
+- [未做/有意压住] SynthController/KeymapController/RecordingController 三拆、SynthSession、SynthCapabilities
+      结构体——风险高或属过早抽象，留作后续增量。`record_start_` 已有 seq_cst happens-before，非 bug，未动。
+- [x] 验收：windows-gui-debug `/W4 /WX` 干净 + 冒烟启动不崩；headless 82/82。
 
 ---
 

@@ -213,6 +213,16 @@ void KeyMapParser::parse20(const std::vector<std::string>& lines, ParseResult& o
       b.channel = static_cast<uint8_t>(ch);
       b.action = KeyAction::SustainSet;
       b.step = static_cast<int8_t>(t.size() >= 6 ? safeInt(t[5], 127) : 127);
+    } else if (act == "SUSTAINPEDAL" || act == "SOSTENUTO" ||
+               act == "SOFT" || act == "SOFTPEDAL") {
+      // Momentary pedal: "<key> SustainPedal|Sostenuto|Soft <channel>".
+      if (t.size() < 4) { err(i, "pedal needs channel"); continue; }
+      int ch = parseChannel(t[3]);
+      if (ch < 0) { err(i, "bad channel"); continue; }
+      b.channel = static_cast<uint8_t>(ch);
+      if (act == "SUSTAINPEDAL")      b.action = KeyAction::SustainPedal;
+      else if (act == "SOSTENUTO")    b.action = KeyAction::SostenutoPedal;
+      else                            b.action = KeyAction::SoftPedal;
     } else if (act == "RECORD") {
       b.action = KeyAction::Record;
     } else {
@@ -293,6 +303,16 @@ void KeyMapParser::parse21(const std::vector<std::string>& lines, ParseResult& o
       b.channel = static_cast<uint8_t>(ch);
       b.action = KeyAction::SustainSet;
       b.step = static_cast<int8_t>(t.size() >= 6 ? safeInt(t[5], 127) : 127);
+    } else if (act == "SUSTAINPEDAL" || act == "SOSTENUTO" ||
+               act == "SOFT" || act == "SOFTPEDAL") {
+      // Momentary pedal: "<key> SustainPedal|Sostenuto|Soft <channel>".
+      if (t.size() < 4) { err(i, "pedal needs channel"); continue; }
+      int ch = parseChannel(t[3]);
+      if (ch < 0) { err(i, "bad channel"); continue; }
+      b.channel = static_cast<uint8_t>(ch);
+      if (act == "SUSTAINPEDAL")      b.action = KeyAction::SustainPedal;
+      else if (act == "SOSTENUTO")    b.action = KeyAction::SostenutoPedal;
+      else                            b.action = KeyAction::SoftPedal;
     } else if (act == "RECORD") {
       b.action = KeyAction::Record;
     } else {

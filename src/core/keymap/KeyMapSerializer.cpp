@@ -96,6 +96,15 @@ std::string KeyMapSerializer::serialize(const KeyMap& map) {
         out << "Keydown " << keyName << " Sustain " << ch
             << " Set " << static_cast<int>(b.step) << "\n";
         break;
+      case KeyAction::SustainPedal:
+        out << "Keydown " << keyName << " SustainPedal " << ch << "\n";
+        break;
+      case KeyAction::SostenutoPedal:
+        out << "Keydown " << keyName << " Sostenuto " << ch << "\n";
+        break;
+      case KeyAction::SoftPedal:
+        out << "Keydown " << keyName << " Soft " << ch << "\n";
+        break;
       case KeyAction::Record:
         out << "Keydown " << keyName << " Record\n";
         break;

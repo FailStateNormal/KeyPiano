@@ -225,6 +225,138 @@ TEST(KeyMap, ResolveUnmappedKey) {
   EXPECT_FALSE(r.map.resolve(0x42, true, ch0, ch1).has_value());  // B not mapped
 }
 
+// ── Pedals (CC 64 / 66 / 67) ─────────────────────────────────────────────────
+
+static const char* kPedals21 = R"(FreePiano 2.1
+Keydown Space SustainPedal In_0
+Keydown F3 Sostenuto In_0
+Keydown F4 Soft In_0
+)";
+
+TEST(KeyMapParser, ParsesPedalActions) {
+  auto r = parse(kPedals21);
+  ASSERT_TRUE(r.ok()) << (!r.errors.empty() ? r.errors[0] : "");
+  ASSERT_NE(r.map.find(0x20), nullptr);                    // Space
+  EXPECT_EQ(r.map.find(0x20)->action, KeyAction::SustainPedal);
+  ASSERT_NE(r.map.find(0x72), nullptr);                    // F3
+  EXPECT_EQ(r.map.find(0x72)->action, KeyAction::SostenutoPedal);
+  ASSERT_NE(r.map.find(0x73), nullptr);                    // F4
+  EXPECT_EQ(r.map.find(0x73)->action, KeyAction::SoftPedal);
+}
+
+TEST(KeyMapParser, PedalRejectsMissingChannel) {
+  auto r = parse("FreePiano 2.1\nKeydown Space SustainPedal\n");
+  EXPECT_FALSE(r.ok());
+}
+
+TEST(KeyMap, ResolveSustainPedalDownUp) {
+  auto r = parse(kPedals21);
+  ASSERT_TRUE(r.ok());
+  ChannelState ch0, ch1;
+
+  // Keydown → CC 64 value 127 (pedal pressed).
+  auto down = r.map.resolve(0x20, true, ch0, ch1);
+  ASSERT_TRUE(down.has_value());
+  EXPECT_EQ(down->type, EventType::ControlChange);
+  EXPECT_EQ(down->chan, 0);
+  EXPECT_EQ(down->note, 64);
+  EXPECT_EQ(down->vel, 127);
+
+  // Keyup → CC 64 value 0 (pedal released).
+  auto up = r.map.resolve(0x20, false, ch0, ch1);
+  ASSERT_TRUE(up.has_value());
+  EXPECT_EQ(up->type, EventType::ControlChange);
+  EXPECT_EQ(up->note, 64);
+  EXPECT_EQ(up->vel, 0);
+}
+
+TEST(KeyMap, ResolveSostenutoAndSoftCcNumbers) {
+  auto r = parse(kPedals21);
+  ASSERT_TRUE(r.ok());
+  ChannelState ch0, ch1;
+  EXPECT_EQ(r.map.resolve(0x72, true, ch0, ch1)->note, 66);  // sostenuto
+  EXPECT_EQ(r.map.resolve(0x73, true, ch0, ch1)->note, 67);  // soft
+}
+
+TEST(KeyMapSerializer, PedalRoundTrip) {
+  auto r1 = parse(kPedals21);
+  ASSERT_TRUE(r1.ok());
+  auto r2 = KeyMapParser::parse(KeyMapSerializer::serialize(r1.map));
+  ASSERT_TRUE(r2.ok()) << (!r2.errors.empty() ? r2.errors[0] : "");
+  EXPECT_EQ(r2.map.find(0x20)->action, KeyAction::SustainPedal);
+  EXPECT_EQ(r2.map.find(0x72)->action, KeyAction::SostenutoPedal);
+  EXPECT_EQ(r2.map.find(0x73)->action, KeyAction::SoftPedal);
+}
+
+// ── KeyMap::handle (command actions wired up) ────────────────────────────────
+
+TEST(KeyMap, HandleOctaveShiftChangesNote) {
+  auto r = parse("FreePiano 2.1\n"
+                 "Keydown A Note In_0 C4\n"
+                 "Keydown F2 Octave In_0 Inc 1\n");
+  ASSERT_TRUE(r.ok());
+  ChannelState ch0, ch1;
+  // Before: A → C4 = 60.
+  auto a = r.map.handle(0x41, true, ch0, ch1);
+  ASSERT_TRUE(a.midi.has_value());
+  EXPECT_EQ(a.midi->note, 60);
+  // F2 (0x71) raises the octave; A now → C5 = 72.
+  r.map.handle(0x71, true, ch0, ch1);
+  auto b = r.map.handle(0x41, true, ch0, ch1);
+  ASSERT_TRUE(b.midi.has_value());
+  EXPECT_EQ(b.midi->note, 72);
+}
+
+TEST(KeyMap, HandleVelocityShiftChangesNoteVelocity) {
+  auto r = parse("FreePiano 2.1\n"
+                 "Keydown A Note In_0 C4\n"
+                 "Keydown Tab Velocity In_0 Inc 10\n");
+  ASSERT_TRUE(r.ok());
+  ChannelState ch0, ch1;
+  const int base = ch0.velocity;
+  r.map.handle(0x09, true, ch0, ch1);  // Tab → velocity +10
+  auto n = r.map.handle(0x41, true, ch0, ch1);
+  ASSERT_TRUE(n.midi.has_value());
+  EXPECT_EQ(n.midi->vel, base + 10);
+}
+
+TEST(KeyMap, HandleRecordTogglesOnKeydownOnly) {
+  auto r = parse("FreePiano 2.1\nKeydown ScrollLock Record\n");
+  ASSERT_TRUE(r.ok());
+  ChannelState ch0, ch1;
+  EXPECT_TRUE(r.map.handle(0x91, true, ch0, ch1).toggle_record);    // keydown
+  EXPECT_FALSE(r.map.handle(0x91, false, ch0, ch1).toggle_record);  // keyup
+}
+
+TEST(KeyMap, HandleLegacySustainSetEmitsCc64) {
+  auto r = parse("FreePiano 2.1\nKeydown Space Sustain In_0 Set 127\n");
+  ASSERT_TRUE(r.ok());
+  ChannelState ch0, ch1;
+  auto down = r.map.handle(0x20, true, ch0, ch1);
+  ASSERT_TRUE(down.midi.has_value());
+  EXPECT_EQ(down.midi->type, EventType::ControlChange);
+  EXPECT_EQ(down.midi->note, 64);
+  EXPECT_EQ(down.midi->vel, 127);
+}
+
+TEST(ChannelState, ClampsAllRanges) {
+  ChannelState ch;
+  for (int i = 0; i < 10; ++i) ch.shiftOctave(+1);
+  EXPECT_EQ(ch.octave_offset, 4);
+  for (int i = 0; i < 20; ++i) ch.shiftOctave(-1);
+  EXPECT_EQ(ch.octave_offset, -4);
+
+  ch.setVelocityValue(999);
+  EXPECT_EQ(ch.velocity, 127);
+  ch.setVelocityValue(-5);
+  EXPECT_EQ(ch.velocity, 1);
+
+  for (int i = 0; i < 20; ++i) ch.shiftKeySignature(+1);
+  EXPECT_EQ(ch.key_signature, 6);
+  for (int i = 0; i < 40; ++i) ch.shiftKeySignature(-1);
+  EXPECT_EQ(ch.key_signature, -6);
+}
+
 // ── Round-trip (serialize → parse) ───────────────────────────────────────────
 
 TEST(KeyMapSerializer, RoundTrip) {

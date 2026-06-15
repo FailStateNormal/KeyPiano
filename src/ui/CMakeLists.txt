@@ -1,6 +1,8 @@
 add_library(keypiano_ui STATIC
     MainWindow.cpp
     MainWindow.ui
+    I18n.cpp
+    HelpContent.cpp
     bridge/AudioBridge.cpp
     widgets/PianoWidget.cpp
     widgets/KeyboardOverlayWidget.cpp

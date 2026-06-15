@@ -14,12 +14,17 @@
 #include "recorder/Recorder.h"
 #include "synth/SynthesizerBase.h"
 
+#include "I18n.h"
+
 QT_BEGIN_NAMESPACE
 class QAction;
 class QCloseEvent;
+class QEvent;
 class QLabel;
 class QMenu;
 class QTimer;
+class QToolBar;
+class QTranslator;
 namespace Ui { class MainWindow; }
 QT_END_NAMESPACE
 
@@ -39,6 +44,9 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    // Catches QEvent::LanguageChange (sent when a translator is installed/removed)
+    // and re-applies every code-set string via retranslateUi().
+    void changeEvent(QEvent* event) override;
 
 private slots:
     void onOpenSf2();
@@ -56,16 +64,35 @@ private slots:
     void onStartRecording();
     void onStop();
     void onStartPlayback();
+    void onShowUsageGuide();
+    void onShowAbout();
     void updateStatus();
 
 private:
     void setupMenus();
+    void setupHelpMenu();
+    // Switch the UI language (installs/removes the embedded translator, persists
+    // the choice, and refreshes the menu checkmarks).
+    void setLanguage(Lang lang);
+    void loadLanguageSetting();   // apply the language saved from a previous run
+    void retranslateUi();         // re-set every string built in code
+    void refreshSf2Label();       // rebuild the status-bar instrument label
     void setupToolBar();
     void setupStatusBar();
     void setupEngine();
     void setupPianoWidget();
     void loadStartupKeymap();   // prefer the user's saved user.map, else the default
     void loadDefaultKeymap();   // load embedded :/keymaps/default.map
+    // Adopt `km` as the active keymap: updates the UI working copy, publishes an
+    // immutable snapshot for the input thread, refreshes the overlay, and enables
+    // the keymap-dependent menu actions. The single funnel for every keymap change.
+    void setActiveKeymap(KeyMap km);
+    void publishKeymap();       // store a fresh shared snapshot from keymap_
+    // Runs on the keyboard-hook thread: routes one key event through the keymap
+    // snapshot to the engine / recorder / record-toggle. No UI-thread state is
+    // touched directly (record toggles are marshalled back to the UI thread).
+    void handleKeyboardEvent(const KeyEvent& kev);
+    void toggleRecordFromHotkey();  // UI-thread: start/stop recording from a Record key
     QString userKeymapPath() const;  // %APPDATA%/keypiano/user.map
     QString presetsDir() const;      // %APPDATA%/keypiano/presets
     void rebuildPresetMenu();        // repopulate the Presets submenu from disk
@@ -110,7 +137,14 @@ private:
     KeyboardOverlayWidget*   overlay_       = nullptr;
     Vst3EditorWindow*        editor_window_ = nullptr;  // nulled on destroy
 
+    // UI-thread working copy, edited in place by load/edit/rebind/preset actions.
     KeyMap       keymap_;
+    // Immutable snapshot the hook thread reads. UI publishes a new shared_ptr
+    // after every edit; the hook atomically loads it — no lock, no data race on
+    // keymap_ itself (which the UI thread keeps mutating).
+    std::atomic<std::shared_ptr<const KeyMap>> keymap_ptr_;
+    // Only ever touched on the hook thread (octave/velocity/key-signature
+    // actions mutate them; resolve reads them).
     ChannelState ch0_{};
     ChannelState ch1_{};
 
@@ -128,6 +162,11 @@ private:
     enum class Backend { FluidSynth, Vst3 };
     Backend current_backend_ = Backend::FluidSynth;
 
+    QMenu*   file_menu_       = nullptr;
+    QMenu*   rec_menu_        = nullptr;
+    QMenu*   help_menu_       = nullptr;
+    QMenu*   lang_menu_       = nullptr;
+    QToolBar* toolbar_        = nullptr;
     QAction* act_open_sf2_     = nullptr;
     QAction* act_open_vst3_    = nullptr;
     QAction* act_show_editor_  = nullptr;
@@ -137,9 +176,17 @@ private:
     QAction* act_reset_keymap_ = nullptr;
     QMenu*   preset_menu_     = nullptr;  // dynamic list of saved keymap presets
     QAction* act_settings_    = nullptr;
+    QAction* act_exit_        = nullptr;
     QAction* act_rec_start_   = nullptr;
     QAction* act_stop_        = nullptr;
     QAction* act_playback_    = nullptr;
+    QAction* act_usage_guide_ = nullptr;
+    QAction* act_about_       = nullptr;
+    QAction* act_lang_en_     = nullptr;
+    QAction* act_lang_zh_     = nullptr;
+
+    Lang        lang_       = Lang::English;
+    Translator* translator_ = nullptr;  // installed only in Chinese mode
 
     audio::AudioEngine::Config audio_cfg_;  // last-applied engine config
 
@@ -149,6 +196,7 @@ private:
 
     QTimer*  status_timer_     = nullptr;
     QString  current_sf2_name_ = "(none)";
+    bool     sf2_builtin_      = false;  // current instrument is the embedded default
     // Full path of the user-loaded SF2 (empty for the built-in default). Used to
     // pre-select the right entry when reopening the dialog — must be a real path,
     // not the display name, or it pollutes the recent list with an invalid entry.

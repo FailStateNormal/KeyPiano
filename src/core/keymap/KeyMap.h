@@ -20,9 +20,16 @@ enum class KeyAction : uint8_t {
   VelocityDec,
   KeySignatureInc,  // key_signature += step
   KeySignatureDec,
-  SustainSet,     // set sustain to `step` (0 or 127)
+  SustainSet,     // set sustain to `step` (0 or 127) — legacy latch, state only
   VelocitySet,    // set velocity to `step`
   Record,         // toggle recording (no MIDI event)
+
+  // Momentary pedals. Each resolves to a MIDI ControlChange on BOTH key edges:
+  // keydown presses the pedal (CC value 127), keyup releases it (0). The
+  // synthesizer implements the actual behavior from the standard CC numbers.
+  SustainPedal,    // CC 64 — sustain / damper: held notes ring until released
+  SostenutoPedal,  // CC 66 — sostenuto: sustains only the notes held when pressed
+  SoftPedal,       // CC 67 — soft / una corda: softens subsequent notes
 };
 
 struct KeyBinding {
@@ -44,6 +51,22 @@ struct ChannelState {
   // key_signature lives here (not in KeyMap) so it can be changed at runtime
   // without reloading the map.  Range: -6 … +6 semitones.
   int8_t  key_signature = 0;
+
+  // Clamped mutators — the single place range limits live, so no caller ever
+  // has to re-clamp octave/velocity/key-signature changes by hand.
+  void shiftOctave(int delta);        // result clamped to [-4, +4]
+  void shiftVelocity(int delta);      // result clamped to [1, 127]
+  void setVelocityValue(int value);   // clamped to [1, 127]
+  void shiftKeySignature(int delta);  // result clamped to [-6, +6]
+};
+
+// Outcome of feeding one key event through a KeyMap. A binding produces at most
+// one of: a MIDI event to send, or a request to toggle recording. Octave /
+// velocity / key-signature actions mutate the ChannelState in place and produce
+// neither (they change how *future* notes resolve).
+struct KeyResult {
+  std::optional<MidiEvent> midi;          // Note / ControlChange to dispatch
+  bool                     toggle_record = false;  // Record action fired
 };
 
 class KeyMap {
@@ -60,6 +83,14 @@ class KeyMap {
   std::optional<MidiEvent> resolve(uint32_t vk_code, bool is_keydown,
                                    const ChannelState& ch0,
                                    const ChannelState& ch1) const;
+
+  // Full key handling for the input layer: resolves Note/pedal/legacy-sustain to
+  // a MidiEvent, applies octave/velocity/key-signature actions to the matching
+  // ChannelState (clamped), and reports Record toggles. `ch0`/`ch1` are mutated
+  // in place for the state-changing actions. `*this` is not modified, so it is
+  // safe to call on a shared immutable snapshot from the input thread.
+  KeyResult handle(uint32_t vk_code, bool is_keydown,
+                   ChannelState& ch0, ChannelState& ch1) const;
 
   // Return the binding for a key, or nullptr if not mapped.
   const KeyBinding* find(uint32_t vk_code) const;

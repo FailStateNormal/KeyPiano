@@ -7,7 +7,9 @@
 #include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QDialog>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -23,9 +25,13 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QTextBrowser>
 #include <QTimer>
 #include <QToolBar>
+#include <QVBoxLayout>
 
+#include "HelpContent.h"
+#include "I18n.h"
 #include "bridge/AudioBridge.h"
 #include "widgets/PianoWidget.h"
 #include "widgets/KeyboardOverlayWidget.h"
@@ -84,11 +90,13 @@ MainWindow::MainWindow(QWidget* parent)
 
     setupMenus();
     setupToolBar();
+    setupHelpMenu();
     setupStatusBar();
     setupEngine();
     setupPianoWidget();
     loadStartupKeymap();
     loadDefaultSoundFont();
+    loadLanguageSetting();  // re-apply the language chosen in a previous session
 
     status_timer_ = new QTimer(this);
     connect(status_timer_, &QTimer::timeout, this, &MainWindow::updateStatus);
@@ -114,85 +122,114 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 // ── Setup ──────────────────────────────────────────────────────────────────────
 
 void MainWindow::setupMenus() {
-    auto* file_menu = menuBar()->addMenu(tr("&File"));
+    file_menu_ = menuBar()->addMenu(tr("&File"));
 
     act_open_sf2_ = new QAction(tr("Open SF&2..."), this);
     act_open_sf2_->setShortcut(QKeySequence("Ctrl+O"));
     connect(act_open_sf2_, &QAction::triggered, this, &MainWindow::onOpenSf2);
-    file_menu->addAction(act_open_sf2_);
+    file_menu_->addAction(act_open_sf2_);
 
 #ifdef KEYPIANO_ENABLE_VST3
     act_open_vst3_ = new QAction(tr("Open &VST3 Instrument..."), this);
     act_open_vst3_->setShortcut(QKeySequence("Ctrl+Shift+O"));
     connect(act_open_vst3_, &QAction::triggered, this, &MainWindow::onOpenVst3);
-    file_menu->addAction(act_open_vst3_);
+    file_menu_->addAction(act_open_vst3_);
 
     act_show_editor_ = new QAction(tr("Show Plugin &Editor..."), this);
     act_show_editor_->setShortcut(QKeySequence("Ctrl+E"));
     act_show_editor_->setEnabled(false);  // enabled once a VST3 editor is loaded
     connect(act_show_editor_, &QAction::triggered, this, &MainWindow::onShowPluginEditor);
-    file_menu->addAction(act_show_editor_);
+    file_menu_->addAction(act_show_editor_);
 #endif
 
     act_open_keymap_ = new QAction(tr("Open &Keymap..."), this);
     act_open_keymap_->setShortcut(QKeySequence("Ctrl+K"));
     connect(act_open_keymap_, &QAction::triggered, this, &MainWindow::onOpenKeymap);
-    file_menu->addAction(act_open_keymap_);
+    file_menu_->addAction(act_open_keymap_);
 
     act_edit_keymap_ = new QAction(tr("&Edit Keymap Labels..."), this);
     act_edit_keymap_->setEnabled(false);  // enabled after a keymap is loaded
     connect(act_edit_keymap_, &QAction::triggered, this, &MainWindow::onEditKeymap);
-    file_menu->addAction(act_edit_keymap_);
+    file_menu_->addAction(act_edit_keymap_);
 
     act_rebind_ = new QAction(tr("Re&bind Keys (click a key, then press)"), this);
     act_rebind_->setCheckable(true);
     act_rebind_->setEnabled(false);  // enabled after a keymap is loaded
     connect(act_rebind_, &QAction::toggled, this, &MainWindow::onToggleRebind);
-    file_menu->addAction(act_rebind_);
+    file_menu_->addAction(act_rebind_);
 
     act_reset_keymap_ = new QAction(tr("Reset Keymap to &Default"), this);
     connect(act_reset_keymap_, &QAction::triggered, this, &MainWindow::onResetKeymap);
-    file_menu->addAction(act_reset_keymap_);
+    file_menu_->addAction(act_reset_keymap_);
 
     // Presets: save the current layout under a name, switch between saved
     // layouts, or delete one. Entries are populated from disk in rebuildPresetMenu().
-    preset_menu_ = file_menu->addMenu(tr("Key&map Presets"));
+    preset_menu_ = file_menu_->addMenu(tr("Key&map Presets"));
     rebuildPresetMenu();
 
-    file_menu->addSeparator();
+    file_menu_->addSeparator();
 
     act_settings_ = new QAction(tr("&Settings..."), this);
     act_settings_->setShortcut(QKeySequence("Ctrl+,"));
     connect(act_settings_, &QAction::triggered, this, &MainWindow::onOpenSettings);
-    file_menu->addAction(act_settings_);
+    file_menu_->addAction(act_settings_);
 
-    file_menu->addSeparator();
+    file_menu_->addSeparator();
 
-    auto* act_exit = new QAction(tr("E&xit"), this);
-    act_exit->setShortcut(QKeySequence("Ctrl+Q"));
-    connect(act_exit, &QAction::triggered, qApp, &QApplication::quit);
-    file_menu->addAction(act_exit);
+    act_exit_ = new QAction(tr("E&xit"), this);
+    act_exit_->setShortcut(QKeySequence("Ctrl+Q"));
+    connect(act_exit_, &QAction::triggered, qApp, &QApplication::quit);
+    file_menu_->addAction(act_exit_);
 
-    auto* rec_menu = menuBar()->addMenu(tr("&Record"));
+    rec_menu_ = menuBar()->addMenu(tr("&Record"));
 
     act_rec_start_ = new QAction(tr("&Start Recording"), this);
     act_rec_start_->setShortcut(QKeySequence("Ctrl+R"));
     connect(act_rec_start_, &QAction::triggered, this, &MainWindow::onStartRecording);
-    rec_menu->addAction(act_rec_start_);
+    rec_menu_->addAction(act_rec_start_);
 
     act_stop_ = new QAction(tr("&Stop"), this);
     act_stop_->setShortcut(QKeySequence("Ctrl+."));
     act_stop_->setEnabled(false);
     connect(act_stop_, &QAction::triggered, this, &MainWindow::onStop);
-    rec_menu->addAction(act_stop_);
+    rec_menu_->addAction(act_stop_);
 
-    rec_menu->addSeparator();
+    rec_menu_->addSeparator();
 
     act_playback_ = new QAction(tr("&Playback"), this);
     act_playback_->setShortcut(QKeySequence("Ctrl+P"));
     act_playback_->setEnabled(false);
     connect(act_playback_, &QAction::triggered, this, &MainWindow::onStartPlayback);
-    rec_menu->addAction(act_playback_);
+    rec_menu_->addAction(act_playback_);
+}
+
+void MainWindow::setupHelpMenu() {
+    // Language submenu (mutually-exclusive radio items). English/简体中文 are
+    // intentionally NOT translated — each is shown in its own language.
+    help_menu_ = menuBar()->addMenu(tr("&Help"));
+
+    lang_menu_ = help_menu_->addMenu(tr("&Language"));
+    act_lang_en_ = lang_menu_->addAction(QStringLiteral("English"));
+    act_lang_en_->setCheckable(true);
+    connect(act_lang_en_, &QAction::triggered, this,
+            [this] { setLanguage(Lang::English); });
+    act_lang_zh_ = lang_menu_->addAction(QStringLiteral("简体中文"));
+    act_lang_zh_->setCheckable(true);
+    connect(act_lang_zh_, &QAction::triggered, this,
+            [this] { setLanguage(Lang::Chinese); });
+    act_lang_en_->setChecked(true);  // English is the default until loadLanguageSetting
+
+    help_menu_->addSeparator();
+
+    act_usage_guide_ = new QAction(tr("&Usage Guide..."), this);
+    act_usage_guide_->setShortcut(QKeySequence("F1"));
+    connect(act_usage_guide_, &QAction::triggered, this,
+            &MainWindow::onShowUsageGuide);
+    help_menu_->addAction(act_usage_guide_);
+
+    act_about_ = new QAction(tr("&About keypiano..."), this);
+    connect(act_about_, &QAction::triggered, this, &MainWindow::onShowAbout);
+    help_menu_->addAction(act_about_);
 }
 
 void MainWindow::setupToolBar() {
@@ -200,13 +237,13 @@ void MainWindow::setupToolBar() {
     act_stop_->setIcon(QIcon(":/icons/stop.png"));
     act_playback_->setIcon(QIcon(":/icons/play.png"));
 
-    auto* tb = addToolBar(tr("Controls"));
-    tb->setMovable(false);
-    tb->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    tb->addAction(act_rec_start_);
-    tb->addAction(act_stop_);
-    tb->addSeparator();
-    tb->addAction(act_playback_);
+    toolbar_ = addToolBar(tr("Controls"));
+    toolbar_->setMovable(false);
+    toolbar_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    toolbar_->addAction(act_rec_start_);
+    toolbar_->addAction(act_stop_);
+    toolbar_->addSeparator();
+    toolbar_->addAction(act_playback_);
 }
 
 void MainWindow::setupStatusBar() {
@@ -248,44 +285,8 @@ void MainWindow::setupEngine() {
 
 void MainWindow::installHook() {
     hook_ = KeyboardHook::create();
-    bool ok = hook_->install([this](const KeyEvent& kev) {
-        // Rebind capture: if a piano key is waiting for a physical key, grab the
-        // next keydown and hand it to the UI thread instead of playing a note.
-        if (kev.is_keydown &&
-            rebind_armed_.exchange(false, std::memory_order_acq_rel)) {
-            const uint32_t vk = kev.vk_code;
-            QMetaObject::invokeMethod(
-                this, [this, vk] { applyRebind(vk); }, Qt::QueuedConnection);
-            return;
-        }
-
-        auto midi = keymap_.resolve(kev.vk_code, kev.is_keydown, ch0_, ch1_);
-        if (!midi) return;
-
-        if (recorder_ && recorder_->state() == Recorder::State::Recording) {
-            using namespace std::chrono;
-            midi->ts_us = duration_cast<microseconds>(
-                              steady_clock::now() - record_start_)
-                              .count();
-            recorder_->onMidiEvent(*midi);
-        }
-
-        if (!engine_) return;
-        switch (midi->type) {
-            case EventType::NoteOn:
-                engine_->postNoteOn(midi->chan, midi->note, midi->vel);
-                break;
-            case EventType::NoteOff:
-                engine_->postNoteOff(midi->chan, midi->note);
-                break;
-            case EventType::ControlChange:
-                engine_->postControlChange(midi->chan, midi->note, midi->vel);
-                break;
-            case EventType::AllNotesOff:
-                engine_->postAllNotesOff(midi->chan);
-                break;
-        }
-    });
+    bool ok = hook_->install(
+        [this](const KeyEvent& kev) { handleKeyboardEvent(kev); });
     if (!ok) {
         QMessageBox::warning(this, tr("Hook Error"),
                              tr("Failed to install keyboard hook.\n"
@@ -294,22 +295,86 @@ void MainWindow::installHook() {
     }
 }
 
+void MainWindow::handleKeyboardEvent(const KeyEvent& kev) {
+    // Rebind capture: if a piano key is waiting for a physical key, grab the next
+    // keydown and hand it to the UI thread instead of playing a note.
+    if (kev.is_keydown &&
+        rebind_armed_.exchange(false, std::memory_order_acq_rel)) {
+        const uint32_t vk = kev.vk_code;
+        QMetaObject::invokeMethod(
+            this, [this, vk] { applyRebind(vk); }, Qt::QueuedConnection);
+        return;
+    }
+
+    // Read the immutable keymap snapshot — never keymap_, which the UI thread
+    // mutates concurrently. handle() also applies octave/velocity/key-signature
+    // actions to ch0_/ch1_ (hook-thread-owned) and flags Record toggles.
+    auto snap = keymap_ptr_.load(std::memory_order_acquire);
+    if (!snap) return;
+    KeyResult res = snap->handle(kev.vk_code, kev.is_keydown, ch0_, ch1_);
+
+    if (res.toggle_record) {
+        QMetaObject::invokeMethod(
+            this, [this] { toggleRecordFromHotkey(); }, Qt::QueuedConnection);
+    }
+    if (!res.midi) return;
+    MidiEvent ev = *res.midi;
+
+    if (recorder_ && recorder_->state() == Recorder::State::Recording) {
+        using namespace std::chrono;
+        ev.ts_us = duration_cast<microseconds>(
+                       steady_clock::now() - record_start_)
+                       .count();
+        recorder_->onMidiEvent(ev);
+    }
+
+    // engine_ is only reassigned by stop/startEngine, which uninstall the hook
+    // first — so it cannot be swapped out from under this callback.
+    if (!engine_) return;
+    switch (ev.type) {
+        case EventType::NoteOn:
+            engine_->postNoteOn(ev.chan, ev.note, ev.vel);
+            break;
+        case EventType::NoteOff:
+            engine_->postNoteOff(ev.chan, ev.note);
+            break;
+        case EventType::ControlChange:
+            engine_->postControlChange(ev.chan, ev.note, ev.vel);
+            break;
+        case EventType::AllNotesOff:
+            engine_->postAllNotesOff(ev.chan);
+            break;
+    }
+}
+
+void MainWindow::toggleRecordFromHotkey() {
+    if (!recorder_) return;
+    if (recorder_->state() == Recorder::State::Recording)
+        onStop();
+    else if (recorder_->state() == Recorder::State::Idle)
+        onStartRecording();
+}
+
 void MainWindow::restartEngine(const audio::AudioEngine::Config& cfg) {
     stopEngine();
     startEngine(cfg);
 }
 
 void MainWindow::stopEngine() {
-    // Tear down in reverse construction order. engine_->close() blocks until the
-    // audio callback has stopped (and shuts down the *current* synth_), so once
-    // this returns the caller may safely swap or destroy synth_.
+    // Uninstall the hook FIRST: uninstall() joins the hook thread, guaranteeing
+    // no callback is running (or will run) before we destroy the recorder_ and
+    // engine_ that handleKeyboardEvent() dereferences. Tearing those down while a
+    // callback was mid-flight would be a use-after-free on a backend switch.
+    if (hook_) { hook_->uninstall(); hook_.reset(); }
     if (audio_bridge_) { audio_bridge_->stop(); audio_bridge_.reset(); }
     if (recorder_) {
         recorder_->stopPlayback();
         recorder_->stopRecording();
         recorder_.reset();
     }
-    if (hook_) { hook_->uninstall(); hook_.reset(); }
+    // engine_->close() blocks until the audio callback has stopped (and shuts
+    // down the *current* synth_), so once this returns the caller may safely
+    // swap or destroy synth_.
     if (engine_) { engine_->close(); engine_.reset(); }
 }
 
@@ -398,10 +463,20 @@ void MainWindow::loadDefaultKeymap() {
                              tr("Bundled default keymap has issues:\n%1")
                                  .arg(msg.trimmed()));
     }
-    keymap_ = std::move(result.map);
+    setActiveKeymap(std::move(result.map));
+}
+
+void MainWindow::setActiveKeymap(KeyMap km) {
+    keymap_ = std::move(km);
+    publishKeymap();  // hand the input thread a fresh immutable snapshot
     if (overlay_) overlay_->updateFromKeyMap(keymap_);
-    act_edit_keymap_->setEnabled(true);
-    act_rebind_->setEnabled(true);
+    if (act_edit_keymap_) act_edit_keymap_->setEnabled(true);
+    if (act_rebind_)      act_rebind_->setEnabled(true);
+}
+
+void MainWindow::publishKeymap() {
+    keymap_ptr_.store(std::make_shared<const KeyMap>(keymap_),
+                      std::memory_order_release);
 }
 
 void MainWindow::loadStartupKeymap() {
@@ -415,10 +490,7 @@ void MainWindow::loadStartupKeymap() {
             ss << f.rdbuf();
             auto result = KeyMapParser::parse(ss.str());
             if (result.errors.empty()) {
-                keymap_ = std::move(result.map);
-                if (overlay_) overlay_->updateFromKeyMap(keymap_);
-                act_edit_keymap_->setEnabled(true);
-                act_rebind_->setEnabled(true);
+                setActiveKeymap(std::move(result.map));
                 return;
             }
         }
@@ -467,8 +539,20 @@ void MainWindow::loadDefaultSoundFont() {
 
     if (synth_->loadInstrument(sf2_path.toStdString())) {
         current_sf2_name_ = "default_piano.sf2";
-        lbl_sf2_name_->setText("SF2: " + current_sf2_name_ + tr(" (built-in)"));
+        sf2_builtin_ = true;
+        refreshSf2Label();
     }
+}
+
+// Rebuilds the status-bar instrument label from the current backend + name. Kept
+// in one place so a language switch can refresh the " (built-in)" suffix.
+void MainWindow::refreshSf2Label() {
+    if (!lbl_sf2_name_) return;
+    const QString prefix =
+        (current_backend_ == Backend::Vst3) ? "VST3: " : "SF2: ";
+    QString text = prefix + current_sf2_name_;
+    if (sf2_builtin_) text += tr(" (built-in)");
+    lbl_sf2_name_->setText(text);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -517,7 +601,8 @@ void MainWindow::onOpenSf2() {
     }
     current_sf2_name_ = QFileInfo(path).fileName();
     current_sf2_path_ = path;
-    lbl_sf2_name_->setText("SF2: " + current_sf2_name_);
+    sf2_builtin_ = false;
+    refreshSf2Label();
     statusBar()->showMessage(tr("Loaded: %1").arg(current_sf2_name_), 3000);
 }
 
@@ -559,7 +644,8 @@ void MainWindow::onOpenVst3() {
         .setValue(kVst3DirKey, QFileInfo(path).absolutePath());
 
     current_sf2_name_ = QFileInfo(path).fileName();
-    lbl_sf2_name_->setText("VST3: " + current_sf2_name_);
+    sf2_builtin_ = false;
+    refreshSf2Label();
     statusBar()->showMessage(tr("Loaded VST3: %1").arg(current_sf2_name_), 3000);
     updateEditorAction();
 #endif
@@ -612,8 +698,7 @@ void MainWindow::updateEditorAction() {
 void MainWindow::onEditKeymap() {
     KeyMapEditorDialog dlg(keymap_, this);
     if (dlg.exec() != QDialog::Accepted) return;
-    keymap_ = dlg.keyMap();
-    if (overlay_) overlay_->updateFromKeyMap(keymap_);
+    setActiveKeymap(dlg.keyMap());
     statusBar()->showMessage(tr("Keymap labels updated."), 2000);
 }
 
@@ -664,6 +749,7 @@ void MainWindow::applyRebind(uint32_t vk_code) {
     kb.label     = KeyMapSerializer::keyName(vk_code);
     keymap_.addBinding(kb);
 
+    publishKeymap();  // republish the snapshot so the hook sees the new binding
     if (overlay_) overlay_->updateFromKeyMap(keymap_);
     if (piano_widget_) piano_widget_->setSelectedKey(-1);
     rebind_note_ = -1;
@@ -775,10 +861,7 @@ void MainWindow::onLoadPreset(const QString& name) {
             msg += QString::fromStdString(e) + "\n";
         QMessageBox::warning(this, tr("Preset Warnings"), msg.trimmed());
     }
-    keymap_ = std::move(result.map);
-    if (overlay_) overlay_->updateFromKeyMap(keymap_);
-    act_edit_keymap_->setEnabled(true);
-    act_rebind_->setEnabled(true);
+    setActiveKeymap(std::move(result.map));
     // Loading a preset becomes the active layout; persist it as user.map so it
     // survives a restart (matching the rebind auto-save behaviour).
     saveUserKeymap();
@@ -847,10 +930,7 @@ void MainWindow::onOpenKeymap() {
             msg += QString::fromStdString(e) + "\n";
         QMessageBox::warning(this, tr("Keymap Warnings"), msg.trimmed());
     }
-    keymap_ = std::move(result.map);
-    if (overlay_) overlay_->updateFromKeyMap(keymap_);
-    act_edit_keymap_->setEnabled(true);
-    act_rebind_->setEnabled(true);
+    setActiveKeymap(std::move(result.map));
     statusBar()->showMessage(
         tr("Loaded keymap: %1").arg(QFileInfo(path).fileName()), 3000);
 }
@@ -932,6 +1012,117 @@ void MainWindow::updateStatus() {
             tr("CPU: %1%").arg(cpu * 100.0, 0, 'f', 1));
     }
     syncRecordActions();
+}
+
+// ── Language / Help ─────────────────────────────────────────────────────────────
+
+void MainWindow::changeEvent(QEvent* event) {
+    if (event->type() == QEvent::LanguageChange) retranslateUi();
+    QMainWindow::changeEvent(event);
+}
+
+void MainWindow::setLanguage(Lang lang) {
+    lang_ = lang;
+    if (lang == Lang::Chinese) {
+        if (!translator_) translator_ = new Translator(qApp);
+        qApp->installTranslator(translator_);  // posts a LanguageChange event
+    } else if (translator_) {
+        qApp->removeTranslator(translator_);    // also posts LanguageChange
+    }
+
+    // Reflect the choice in the radio items and persist it for next launch.
+    if (act_lang_en_) act_lang_en_->setChecked(lang == Lang::English);
+    if (act_lang_zh_) act_lang_zh_->setChecked(lang == Lang::Chinese);
+    QSettings("keypiano", "keypiano")
+        .setValue("language", lang == Lang::Chinese ? "zh" : "en");
+
+    // The posted LanguageChange reaches us asynchronously; refresh now too so the
+    // menus update deterministically even before the event loop spins.
+    retranslateUi();
+}
+
+void MainWindow::loadLanguageSetting() {
+    const QString saved =
+        QSettings("keypiano", "keypiano").value("language", "en").toString();
+    setLanguage(saved == "zh" ? Lang::Chinese : Lang::English);
+}
+
+void MainWindow::retranslateUi() {
+    // Menus and submenus.
+    if (file_menu_)   file_menu_->setTitle(tr("&File"));
+    if (rec_menu_)    rec_menu_->setTitle(tr("&Record"));
+    if (help_menu_)   help_menu_->setTitle(tr("&Help"));
+    if (lang_menu_)   lang_menu_->setTitle(tr("&Language"));
+    if (preset_menu_) preset_menu_->setTitle(tr("Key&map Presets"));
+    if (toolbar_)     toolbar_->setWindowTitle(tr("Controls"));
+
+    // File menu actions.
+    if (act_open_sf2_)    act_open_sf2_->setText(tr("Open SF&2..."));
+    if (act_open_vst3_)   act_open_vst3_->setText(tr("Open &VST3 Instrument..."));
+    if (act_show_editor_) act_show_editor_->setText(tr("Show Plugin &Editor..."));
+    if (act_open_keymap_) act_open_keymap_->setText(tr("Open &Keymap..."));
+    if (act_edit_keymap_) act_edit_keymap_->setText(tr("&Edit Keymap Labels..."));
+    if (act_rebind_)
+        act_rebind_->setText(tr("Re&bind Keys (click a key, then press)"));
+    if (act_reset_keymap_)
+        act_reset_keymap_->setText(tr("Reset Keymap to &Default"));
+    if (act_settings_)    act_settings_->setText(tr("&Settings..."));
+    if (act_exit_)        act_exit_->setText(tr("E&xit"));
+
+    // Record menu actions.
+    if (act_rec_start_) act_rec_start_->setText(tr("&Start Recording"));
+    if (act_stop_)      act_stop_->setText(tr("&Stop"));
+    if (act_playback_)  act_playback_->setText(tr("&Playback"));
+
+    // Help menu actions.
+    if (act_usage_guide_) act_usage_guide_->setText(tr("&Usage Guide..."));
+    if (act_about_)       act_about_->setText(tr("&About keypiano..."));
+
+    // Dynamic submenu (re-tr()'s "(no saved presets)", "Save Current As...", ...).
+    rebuildPresetMenu();
+
+    // Status-bar instrument label (refreshes the " (built-in)" suffix). Latency
+    // and CPU labels are refreshed on the next 500 ms status tick.
+    refreshSf2Label();
+}
+
+void MainWindow::onShowUsageGuide() {
+    QDialog dlg(this);
+    dlg.setWindowTitle(lang_ == Lang::Chinese ? QStringLiteral("使用说明")
+                                              : QStringLiteral("Usage Guide"));
+    dlg.resize(680, 560);
+    auto* layout = new QVBoxLayout(&dlg);
+    layout->setContentsMargins(0, 0, 0, 0);
+
+    auto* browser = new QTextBrowser(&dlg);
+    browser->setOpenExternalLinks(true);
+    browser->setHtml(lang_ == Lang::Chinese ? usageGuideHtmlZh()
+                                            : usageGuideHtmlEn());
+    layout->addWidget(browser);
+    dlg.exec();
+}
+
+void MainWindow::onShowAbout() {
+    if (lang_ == Lang::Chinese) {
+        QMessageBox::about(
+            this, QStringLiteral("关于 keypiano"),
+            QStringLiteral(
+                "<h3>keypiano 1.0.0</h3>"
+                "<p>把电脑键盘变成 MIDI 钢琴的轻量工具。</p>"
+                "<p>内置 FluidSynth 软件合成器，也可加载你自己的 SF2 音色库或 "
+                "VST3 乐器插件。</p>"
+                "<p>以 GPL v3 协议开源发布。</p>"));
+    } else {
+        QMessageBox::about(
+            this, QStringLiteral("About keypiano"),
+            QStringLiteral(
+                "<h3>keypiano 1.0.0</h3>"
+                "<p>A lightweight tool that turns your computer keyboard into a "
+                "MIDI piano.</p>"
+                "<p>Ships with the FluidSynth software synth, and can also load "
+                "your own SF2 SoundFonts or VST3 instrument plug-ins.</p>"
+                "<p>Released as open source under the GPL v3 license.</p>"));
+    }
 }
 
 } // namespace keypiano::ui

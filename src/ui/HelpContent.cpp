@@ -52,6 +52,9 @@ sent — use the SF2 engine if you need pedals.</p>
 <ul>
 <li><b>File &rarr; Rebind Keys</b> — turn it on, click a piano key, then press the
 keyboard key you want to assign to it. Changes are saved automatically.</li>
+<li><b>File &rarr; Clear Key Binding</b> — turn it on, then press any mapped key to
+remove its binding (so the key does nothing). Stays on so you can clear several;
+turn it off when done.</li>
 <li><b>File &rarr; Keymap Presets</b> — save the current layout under a name, or
 switch between saved layouts.</li>
 <li><b>File &rarr; Reset Keymap to Default</b> — restore the original layout.</li>
@@ -115,6 +118,8 @@ QString usageGuideHtmlZh() {
 <h3>4. 重映射按键</h3>
 <ul>
 <li><b>文件 &rarr; 重绑按键</b>——开启后先点击一个琴键，再按下要绑定的键盘按键。改动会自动保存。</li>
+<li><b>文件 &rarr; 清除按键绑定</b>——开启后按下任意已绑定的键即可移除它的绑定（让该键变成无效）。
+该模式会保持开启以便连续清除多个，清完后再关闭。</li>
 <li><b>文件 &rarr; 键位预设</b>——把当前布局以名字保存，或在多套已保存布局间切换。</li>
 <li><b>文件 &rarr; 重置键位为默认</b>——恢复最初的布局。</li>
 </ul>

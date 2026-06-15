@@ -36,7 +36,8 @@ public:
 
     // One-time wiring once the widgets / menu actions exist.
     void setWidgets(PianoWidget* piano, KeyboardOverlayWidget* overlay);
-    void setActions(QAction* edit_labels, QAction* rebind, QMenu* preset_menu);
+    void setActions(QAction* edit_labels, QAction* rebind, QAction* clear,
+                    QMenu* preset_menu);
 
     // Load the user's saved user.map, falling back to the bundled default.
     // Call after setWidgets()/setActions().
@@ -51,6 +52,9 @@ public:
     // UI thread) and return true; otherwise return false. Caller should only pass
     // key-down events.
     bool tryCaptureRebind(uint32_t vk_code);
+    // In clear mode every mapped key press is consumed and its binding removed.
+    // Returns true (event swallowed) while clear mode is active. Key-down only.
+    bool tryCaptureClear(uint32_t vk_code);
 
     // Repopulate the Presets submenu from disk. Also re-run on a language change
     // so the dynamic entries pick up the new translation.
@@ -60,6 +64,7 @@ public slots:
     void openKeymap();            // File ▸ Open Keymap…
     void editLabels();            // File ▸ Edit Keymap Labels…
     void toggleRebind(bool on);   // File ▸ Rebind Keys
+    void toggleClear(bool on);    // File ▸ Clear Key Binding
     void resetToDefault();        // File ▸ Reset Keymap to Default
     void onRebindKeyClicked(int midi_note);  // PianoWidget click in rebind mode
     void savePreset();
@@ -75,6 +80,7 @@ private:
     void setActiveKeymap(KeyMap km);// adopt km: publish snapshot + overlay + enable
     void publishKeymap();           // store a fresh immutable snapshot from keymap_
     void applyRebind(uint32_t vk_code);  // UI thread (marshalled from the hook)
+    void applyClear(uint32_t vk_code);   // UI thread (marshalled from the hook)
     void saveUserKeymap();
     QString userKeymapPath() const;  // %APPDATA%/keypiano/user.map
     QString presetsDir() const;      // %APPDATA%/keypiano/presets
@@ -84,6 +90,7 @@ private:
     KeyboardOverlayWidget* overlay_ = nullptr;
     QAction*               act_edit_   = nullptr;
     QAction*               act_rebind_ = nullptr;
+    QAction*               act_clear_  = nullptr;
     QMenu*                 preset_menu_ = nullptr;
 
     // UI-thread working copy, edited in place by load/edit/rebind/preset actions.
@@ -96,6 +103,9 @@ private:
     bool              rebind_mode_ = false;  // "Rebind Keys" toggle active
     int               rebind_note_ = -1;     // piano key chosen, awaiting a key
     std::atomic<bool> rebind_armed_{false};  // a piano key is selected
+    // Clear-binding mode: while on, the hook thread swallows every mapped key and
+    // its binding is removed. Read on the hook thread (atomic).
+    std::atomic<bool> clear_mode_{false};
 };
 
 }  // namespace keypiano::ui

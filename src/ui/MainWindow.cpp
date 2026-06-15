@@ -159,6 +159,13 @@ void MainWindow::setupMenus() {
             keymap_ctl_, &KeymapController::toggleRebind);
     file_menu_->addAction(act_rebind_);
 
+    act_clear_ = new QAction(tr("C&lear Key Binding (press a key to remove)"), this);
+    act_clear_->setCheckable(true);
+    act_clear_->setEnabled(false);  // enabled after a keymap is loaded
+    connect(act_clear_, &QAction::toggled,
+            keymap_ctl_, &KeymapController::toggleClear);
+    file_menu_->addAction(act_clear_);
+
     act_reset_keymap_ = new QAction(tr("Reset Keymap to &Default"), this);
     connect(act_reset_keymap_, &QAction::triggered,
             keymap_ctl_, &KeymapController::resetToDefault);
@@ -167,7 +174,7 @@ void MainWindow::setupMenus() {
     // Presets: save the current layout under a name, switch between saved
     // layouts, or delete one. The controller owns the contents; we own the QMenu.
     preset_menu_ = file_menu_->addMenu(tr("Key&map Presets"));
-    keymap_ctl_->setActions(act_edit_keymap_, act_rebind_, preset_menu_);
+    keymap_ctl_->setActions(act_edit_keymap_, act_rebind_, act_clear_, preset_menu_);
     keymap_ctl_->rebuildPresetMenu();
 
     file_menu_->addSeparator();
@@ -302,6 +309,8 @@ void MainWindow::handleKeyboardEvent(const KeyEvent& kev) {
     // Rebind capture: if a piano key is waiting for a physical key, the controller
     // grabs this keydown (marshalling to the UI thread) instead of playing a note.
     if (kev.is_keydown && keymap_ctl_->tryCaptureRebind(kev.vk_code)) return;
+    // Clear capture: in clear mode, the keydown removes that key's binding.
+    if (kev.is_keydown && keymap_ctl_->tryCaptureClear(kev.vk_code)) return;
 
     // Read the immutable keymap snapshot — never the controller's working copy,
     // which the UI thread mutates concurrently. handle() also applies octave/
@@ -769,6 +778,8 @@ void MainWindow::retranslateUi() {
     if (act_edit_keymap_) act_edit_keymap_->setText(tr("&Edit Keymap Labels..."));
     if (act_rebind_)
         act_rebind_->setText(tr("Re&bind Keys (click a key, then press)"));
+    if (act_clear_)
+        act_clear_->setText(tr("C&lear Key Binding (press a key to remove)"));
     if (act_reset_keymap_)
         act_reset_keymap_->setText(tr("Reset Keymap to &Default"));
     if (act_settings_)    act_settings_->setText(tr("&Settings..."));

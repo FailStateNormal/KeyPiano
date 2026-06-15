@@ -320,6 +320,9 @@
       静态（vk→键名，复用进 serialize）。重绑后 `saveUserKeymap()` 写
       `%APPDATA%\keypiano\user.map`；启动 `loadStartupKeymap()` 优先加载 user.map（解析失败回退默认）。
 - [x] **Reset Keymap to Default** 菜单项：删 user.map + 重载内置 default.map（防止自定义弹崩了出不来）。
+- [x] **（2026-06-15 追加）Clear Key Binding 清除单个绑定**：用户反馈"只能绑不能清"。File→"Clear Key
+      Binding（按一个键即清除）"可勾选模式，与 Rebind 互斥；开启后按任意键 → `KeymapController::tryCaptureClear`
+      （hook 线程 atomic）→ marshal `applyClear` 删该 vk 绑定+发布快照+存 user.map；模式保持开启可连清多个。
 - [x] 验收：windows-gui-debug 构建通过、headless **72/72** 仍过；KeyMapEditorDialog 改名 "Edit Keymap **Labels**" 以区分。
 > 注：方案 3 用户只要当前「双手各一八度」这套，未另造预设——现有 Open Keymap（Ctrl+K）即可切换其它 .map。
 

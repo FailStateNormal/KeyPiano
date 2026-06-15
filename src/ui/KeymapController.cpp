@@ -44,9 +44,10 @@ void KeymapController::setWidgets(PianoWidget* piano,
 }
 
 void KeymapController::setActions(QAction* edit_labels, QAction* rebind,
-                                  QMenu* preset_menu) {
+                                  QAction* clear, QMenu* preset_menu) {
     act_edit_    = edit_labels;
     act_rebind_  = rebind;
+    act_clear_   = clear;
     preset_menu_ = preset_menu;
 }
 
@@ -63,6 +64,7 @@ void KeymapController::setActiveKeymap(KeyMap km) {
     if (overlay_) overlay_->updateFromKeyMap(keymap_);
     if (act_edit_)   act_edit_->setEnabled(true);
     if (act_rebind_) act_rebind_->setEnabled(true);
+    if (act_clear_)  act_clear_->setEnabled(true);
 }
 
 // ── Loading ─────────────────────────────────────────────────────────────────────
@@ -165,6 +167,10 @@ void KeymapController::editLabels() {
 // ── Rebind ──────────────────────────────────────────────────────────────────────
 
 void KeymapController::toggleRebind(bool on) {
+    // Rebind and Clear are mutually exclusive modes.
+    if (on && act_clear_ && act_clear_->isChecked())
+        act_clear_->setChecked(false);  // → toggleClear(false)
+
     rebind_mode_ = on;
     rebind_armed_.store(false, std::memory_order_release);
     rebind_note_ = -1;
@@ -176,6 +182,19 @@ void KeymapController::toggleRebind(bool on) {
         emit status(
             tr("Rebind: click a piano key, then press the keyboard key to assign."),
             0);
+    else
+        emit status(QString(), 0);  // clear
+}
+
+void KeymapController::toggleClear(bool on) {
+    // Rebind and Clear are mutually exclusive modes.
+    if (on && act_rebind_ && act_rebind_->isChecked())
+        act_rebind_->setChecked(false);  // → toggleRebind(false)
+
+    clear_mode_.store(on, std::memory_order_release);
+    if (on)
+        emit status(
+            tr("Clear mode: press any mapped key to remove its binding."), 0);
     else
         emit status(QString(), 0);  // clear
 }
@@ -196,6 +215,29 @@ bool KeymapController::tryCaptureRebind(uint32_t vk_code) {
     QMetaObject::invokeMethod(
         this, [this, vk_code] { applyRebind(vk_code); }, Qt::QueuedConnection);
     return true;
+}
+
+bool KeymapController::tryCaptureClear(uint32_t vk_code) {
+    if (!clear_mode_.load(std::memory_order_acquire)) return false;
+    // Swallow the key (no note plays) and remove its binding on the UI thread.
+    // The mode stays on so several keys can be cleared in a row.
+    QMetaObject::invokeMethod(
+        this, [this, vk_code] { applyClear(vk_code); }, Qt::QueuedConnection);
+    return true;
+}
+
+void KeymapController::applyClear(uint32_t vk_code) {
+    const QString key =
+        QString::fromStdString(KeyMapSerializer::keyName(vk_code));
+    if (!keymap_.find(vk_code)) {
+        emit status(tr("%1 is not bound.").arg(key), 2000);
+        return;
+    }
+    keymap_.removeBinding(vk_code);
+    publishKeymap();  // republish so the hook stops sounding the cleared key
+    if (overlay_) overlay_->updateFromKeyMap(keymap_);
+    saveUserKeymap();
+    emit status(tr("Cleared binding for %1.").arg(key), 3000);
 }
 
 void KeymapController::applyRebind(uint32_t vk_code) {

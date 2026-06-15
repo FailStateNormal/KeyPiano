@@ -9,7 +9,6 @@ add_library(keypiano_ui STATIC
     widgets/KeyboardOverlayWidget.cpp
     widgets/Vst3EditorWindow.cpp
     dialogs/SoundFontDialog.cpp
-    dialogs/KeyMapEditorDialog.cpp
     dialogs/SettingsDialog.cpp
 )
 # NOTE: resources/keypiano.qrc is compiled into the keypiano *executable*

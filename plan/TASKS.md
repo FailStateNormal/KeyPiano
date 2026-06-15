@@ -323,6 +323,10 @@
 - [x] **（2026-06-15 追加）Clear Key Binding 清除单个绑定**：用户反馈"只能绑不能清"。File→"Clear Key
       Binding（按一个键即清除）"可勾选模式，与 Rebind 互斥；开启后按任意键 → `KeymapController::tryCaptureClear`
       （hook 线程 atomic）→ marshal `applyClear` 删该 vk 绑定+发布快照+存 user.map；模式保持开启可连清多个。
+- [x] **（2026-06-15 追加）移除"Edit Keymap Labels"**：用户判断——初衷是改映射，结果做成只改琴键显示标签、
+      不动映射的半成品，自我误导。Rebind（改映射）+Clear（删映射）已覆盖真实需求，故彻底删除
+      `KeyMapEditorDialog.h/.cpp` + 菜单项/槽/I18n 条目。标签本身仍随 keymap 自动显示（重绑时 label=键名），
+      只是去掉"手动编辑标签"这个入口。
 - [x] 验收：windows-gui-debug 构建通过、headless **72/72** 仍过；KeyMapEditorDialog 改名 "Edit Keymap **Labels**" 以区分。
 > 注：方案 3 用户只要当前「双手各一八度」这套，未另造预设——现有 Open Keymap（Ctrl+K）即可切换其它 .map。
 

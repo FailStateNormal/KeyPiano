@@ -36,8 +36,7 @@ public:
 
     // One-time wiring once the widgets / menu actions exist.
     void setWidgets(PianoWidget* piano, KeyboardOverlayWidget* overlay);
-    void setActions(QAction* edit_labels, QAction* rebind, QAction* clear,
-                    QMenu* preset_menu);
+    void setActions(QAction* rebind, QAction* clear, QMenu* preset_menu);
 
     // Load the user's saved user.map, falling back to the bundled default.
     // Call after setWidgets()/setActions().
@@ -62,7 +61,6 @@ public:
 
 public slots:
     void openKeymap();            // File ▸ Open Keymap…
-    void editLabels();            // File ▸ Edit Keymap Labels…
     void toggleRebind(bool on);   // File ▸ Rebind Keys
     void toggleClear(bool on);    // File ▸ Clear Key Binding
     void resetToDefault();        // File ▸ Reset Keymap to Default
@@ -88,7 +86,6 @@ private:
     QWidget*               dialog_parent_ = nullptr;
     PianoWidget*           piano_   = nullptr;
     KeyboardOverlayWidget* overlay_ = nullptr;
-    QAction*               act_edit_   = nullptr;
     QAction*               act_rebind_ = nullptr;
     QAction*               act_clear_  = nullptr;
     QMenu*                 preset_menu_ = nullptr;

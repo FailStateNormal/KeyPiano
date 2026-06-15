@@ -146,12 +146,6 @@ void MainWindow::setupMenus() {
             keymap_ctl_, &KeymapController::openKeymap);
     file_menu_->addAction(act_open_keymap_);
 
-    act_edit_keymap_ = new QAction(tr("&Edit Keymap Labels..."), this);
-    act_edit_keymap_->setEnabled(false);  // enabled after a keymap is loaded
-    connect(act_edit_keymap_, &QAction::triggered,
-            keymap_ctl_, &KeymapController::editLabels);
-    file_menu_->addAction(act_edit_keymap_);
-
     act_rebind_ = new QAction(tr("Re&bind Keys (click a key, then press)"), this);
     act_rebind_->setCheckable(true);
     act_rebind_->setEnabled(false);  // enabled after a keymap is loaded
@@ -174,7 +168,7 @@ void MainWindow::setupMenus() {
     // Presets: save the current layout under a name, switch between saved
     // layouts, or delete one. The controller owns the contents; we own the QMenu.
     preset_menu_ = file_menu_->addMenu(tr("Key&map Presets"));
-    keymap_ctl_->setActions(act_edit_keymap_, act_rebind_, act_clear_, preset_menu_);
+    keymap_ctl_->setActions(act_rebind_, act_clear_, preset_menu_);
     keymap_ctl_->rebuildPresetMenu();
 
     file_menu_->addSeparator();
@@ -775,7 +769,6 @@ void MainWindow::retranslateUi() {
     if (act_open_vst3_)   act_open_vst3_->setText(tr("Open &VST3 Instrument..."));
     if (act_show_editor_) act_show_editor_->setText(tr("Show Plugin &Editor..."));
     if (act_open_keymap_) act_open_keymap_->setText(tr("Open &Keymap..."));
-    if (act_edit_keymap_) act_edit_keymap_->setText(tr("&Edit Keymap Labels..."));
     if (act_rebind_)
         act_rebind_->setText(tr("Re&bind Keys (click a key, then press)"));
     if (act_clear_)

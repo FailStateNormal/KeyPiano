@@ -17,7 +17,6 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 
-#include "dialogs/KeyMapEditorDialog.h"
 #include "keymap/KeyMapParser.h"
 #include "keymap/KeyMapSerializer.h"
 #include "widgets/KeyboardOverlayWidget.h"
@@ -43,9 +42,8 @@ void KeymapController::setWidgets(PianoWidget* piano,
     overlay_ = overlay;
 }
 
-void KeymapController::setActions(QAction* edit_labels, QAction* rebind,
-                                  QAction* clear, QMenu* preset_menu) {
-    act_edit_    = edit_labels;
+void KeymapController::setActions(QAction* rebind, QAction* clear,
+                                  QMenu* preset_menu) {
     act_rebind_  = rebind;
     act_clear_   = clear;
     preset_menu_ = preset_menu;
@@ -62,7 +60,6 @@ void KeymapController::setActiveKeymap(KeyMap km) {
     keymap_ = std::move(km);
     publishKeymap();  // hand the input thread a fresh immutable snapshot
     if (overlay_) overlay_->updateFromKeyMap(keymap_);
-    if (act_edit_)   act_edit_->setEnabled(true);
     if (act_rebind_) act_rebind_->setEnabled(true);
     if (act_clear_)  act_clear_->setEnabled(true);
 }
@@ -155,13 +152,6 @@ void KeymapController::openKeymap() {
     }
     setActiveKeymap(std::move(result.map));
     emit status(tr("Loaded keymap: %1").arg(QFileInfo(path).fileName()), 3000);
-}
-
-void KeymapController::editLabels() {
-    KeyMapEditorDialog dlg(keymap_, dialog_parent_);
-    if (dlg.exec() != QDialog::Accepted) return;
-    setActiveKeymap(dlg.keyMap());
-    emit status(tr("Keymap labels updated."), 2000);
 }
 
 // ── Rebind ──────────────────────────────────────────────────────────────────────

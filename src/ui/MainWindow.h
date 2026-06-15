@@ -143,7 +143,6 @@ private:
     QAction* act_open_vst3_    = nullptr;
     QAction* act_show_editor_  = nullptr;
     QAction* act_open_keymap_  = nullptr;
-    QAction* act_edit_keymap_ = nullptr;
     QAction* act_rebind_      = nullptr;
     QAction* act_clear_       = nullptr;
     QAction* act_reset_keymap_ = nullptr;

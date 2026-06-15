@@ -11,7 +11,6 @@ Translator::Translator(QObject* parent) : QTranslator(parent) {
         {"Open &VST3 Instrument...", QStringLiteral("打开 &VST3 乐器插件...")},
         {"Show Plugin &Editor...", QStringLiteral("显示插件编辑器(&E)...")},
         {"Open &Keymap...", QStringLiteral("打开键位映射(&K)...")},
-        {"&Edit Keymap Labels...", QStringLiteral("编辑键位标签(&E)...")},
         {"Re&bind Keys (click a key, then press)",
          QStringLiteral("重绑按键(&B)（先点琴键，再按物理键）")},
         {"C&lear Key Binding (press a key to remove)",
@@ -66,7 +65,6 @@ Translator::Translator(QObject* parent) : QTranslator(parent) {
          QStringLiteral("当前后端没有插件编辑器。")},
         {"This plug-in does not provide a custom editor window.",
          QStringLiteral("该插件未提供自定义编辑器窗口。")},
-        {"Keymap labels updated.", QStringLiteral("键位标签已更新。")},
         {"Rebind: click a piano key, then press the keyboard key to assign.",
          QStringLiteral("重绑：先点击一个琴键，再按下要绑定的键盘按键。")},
         {"Press a keyboard key to bind to %1...",
@@ -147,19 +145,6 @@ Translator::Translator(QObject* parent) : QTranslator(parent) {
         {"Output Device:", QStringLiteral("输出设备：")},
         {"Sample Rate (Hz):", QStringLiteral("采样率 (Hz)：")},
         {"Buffer Frames:", QStringLiteral("缓冲帧数：")},
-
-        // ── KeyMapEditorDialog ──────────────────────────────────────────────
-        {"Keymap Editor — %1", QStringLiteral("键位映射编辑器 —— %1")},
-        {"(unnamed)", QStringLiteral("（未命名）")},
-        {"Double-click the Label cell to edit the overlay text shown on the "
-         "piano.",
-         QStringLiteral("双击“标签”单元格，可编辑显示在琴键上的覆盖文字。")},
-        {"Label", QStringLiteral("标签")},
-        {"VK Code", QStringLiteral("VK 码")},
-        {"Action", QStringLiteral("动作")},
-        {"Channel", QStringLiteral("通道")},
-        {"MIDI Note", QStringLiteral("MIDI 音符")},
-        {"Step", QStringLiteral("步进")},
     };
 }
 

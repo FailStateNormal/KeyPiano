@@ -43,10 +43,20 @@ public:
     // midi_note is outside [21, 108].  Used by KeyboardOverlayWidget.
     QRect keyRect(int midi_note) const;
 
+    // Rebind mode: a left-click selects a key for rebinding (emitting
+    // keyClickedForRebind) instead of playing a note.
+    void setRebindMode(bool on);
+
+    // Highlight the key currently selected for rebinding (-1 clears).
+    void setSelectedKey(int midi_note);
+
 signals:
     // Emitted on mouse press/release so MainWindow can forward to AudioEngine.
     void mouseNoteOn(int midi_note, int velocity);
     void mouseNoteOff(int midi_note);
+
+    // Emitted when a key is clicked while in rebind mode.
+    void keyClickedForRebind(int midi_note);
 
 public slots:
     void onNoteActivated(int midi_note);
@@ -83,6 +93,9 @@ private:
 
     QTimer* anim_timer_;
     int     mouse_note_ = -1;          // MIDI note held by mouse, or -1
+
+    bool rebind_mode_   = false;       // clicks select-for-rebind instead of play
+    int  selected_note_ = -1;          // key highlighted for rebinding, or -1
 };
 
 } // namespace keypiano::ui

@@ -24,6 +24,11 @@ bool FluidSynthEngine::init(uint32_t sample_rate, uint32_t max_frames) {
   fluid_settings_setint(settings_, "synth.reverb.active", 0);
   fluid_settings_setint(settings_, "synth.chorus.active", 0);
 
+  // FluidSynth's default master gain (0.2) is conservative and left the
+  // built-in piano barely audible. Raise it so notes are clearly heard; 0.5 is
+  // loud without clipping typical full-scale GM SoundFonts the user may load.
+  fluid_settings_setnum(settings_, "synth.gain", 0.5);
+
   synth_ = new_fluid_synth(settings_);
   if (!synth_) {
     delete_fluid_settings(settings_);

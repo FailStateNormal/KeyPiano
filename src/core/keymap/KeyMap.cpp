@@ -19,6 +19,17 @@ void KeyMap::setLabel(uint32_t vk_code, const std::string& label) {
   if (it != index_.end()) bindings_[it->second].label = label;
 }
 
+void KeyMap::removeBinding(uint32_t vk_code) {
+  auto it = index_.find(vk_code);
+  if (it == index_.end()) return;
+  bindings_.erase(bindings_.begin() + static_cast<std::ptrdiff_t>(it->second));
+  // Erasing shifts every later element down by one, so rebuild the index map
+  // rather than trying to patch individual offsets.
+  index_.clear();
+  for (std::size_t i = 0; i < bindings_.size(); ++i)
+    index_[bindings_[i].vk_code] = i;
+}
+
 const KeyBinding* KeyMap::find(uint32_t vk_code) const {
   auto it = index_.find(vk_code);
   if (it == index_.end()) return nullptr;

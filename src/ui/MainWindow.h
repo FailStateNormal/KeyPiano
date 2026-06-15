@@ -1,7 +1,9 @@
 #ifndef KEYPIANO_UI_MAINWINDOW_H_
 #define KEYPIANO_UI_MAINWINDOW_H_
 
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 
 #include <QMainWindow>
@@ -16,6 +18,7 @@ QT_BEGIN_NAMESPACE
 class QAction;
 class QCloseEvent;
 class QLabel;
+class QMenu;
 class QTimer;
 namespace Ui { class MainWindow; }
 QT_END_NAMESPACE
@@ -43,6 +46,12 @@ private slots:
     void onShowPluginEditor();
     void onOpenKeymap();
     void onEditKeymap();
+    void onToggleRebind(bool on);
+    void onResetKeymap();
+    void onRebindKeyClicked(int midi_note);
+    void onSavePreset();
+    void onDeletePreset();
+    void onLoadPreset(const QString& name);
     void onOpenSettings();
     void onStartRecording();
     void onStop();
@@ -55,7 +64,15 @@ private:
     void setupStatusBar();
     void setupEngine();
     void setupPianoWidget();
-    void loadDefaultKeymap();   // load embedded :/keymaps/default.map at startup
+    void loadStartupKeymap();   // prefer the user's saved user.map, else the default
+    void loadDefaultKeymap();   // load embedded :/keymaps/default.map
+    QString userKeymapPath() const;  // %APPDATA%/keypiano/user.map
+    QString presetsDir() const;      // %APPDATA%/keypiano/presets
+    void rebuildPresetMenu();        // repopulate the Presets submenu from disk
+    void saveUserKeymap();           // serialize keymap_ to user.map (rebind persistence)
+    // Applies a captured physical key to the note selected for rebinding. Called
+    // on the UI thread (marshalled from the hook thread via a queued invoke).
+    void applyRebind(uint32_t vk_code);
     void loadDefaultSoundFont();// load embedded piano SF2 so the app is audible out of the box
     void syncRecordActions();
 
@@ -97,6 +114,12 @@ private:
     ChannelState ch0_{};
     ChannelState ch1_{};
 
+    // Rebind state. rebind_armed_ is read on the hook thread (atomic); rebind_note_
+    // and rebind_mode_ are touched only on the UI thread.
+    bool              rebind_mode_  = false;  // "Rebind Keys" toggle active
+    int               rebind_note_  = -1;     // piano key chosen, awaiting a phys key
+    std::atomic<bool> rebind_armed_{false};   // a piano key is selected; capture next key
+
     // Set just before startRecording() so the hook thread can compute ts_us
     // for each captured event (happens-before guaranteed via atomic state_).
     std::chrono::steady_clock::time_point record_start_{};
@@ -110,6 +133,9 @@ private:
     QAction* act_show_editor_  = nullptr;
     QAction* act_open_keymap_  = nullptr;
     QAction* act_edit_keymap_ = nullptr;
+    QAction* act_rebind_      = nullptr;
+    QAction* act_reset_keymap_ = nullptr;
+    QMenu*   preset_menu_     = nullptr;  // dynamic list of saved keymap presets
     QAction* act_settings_    = nullptr;
     QAction* act_rec_start_   = nullptr;
     QAction* act_stop_        = nullptr;
@@ -123,6 +149,10 @@ private:
 
     QTimer*  status_timer_     = nullptr;
     QString  current_sf2_name_ = "(none)";
+    // Full path of the user-loaded SF2 (empty for the built-in default). Used to
+    // pre-select the right entry when reopening the dialog — must be a real path,
+    // not the display name, or it pollutes the recent list with an invalid entry.
+    QString  current_sf2_path_;
 };
 
 } // namespace keypiano::ui

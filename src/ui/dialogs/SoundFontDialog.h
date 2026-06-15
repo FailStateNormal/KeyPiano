@@ -8,6 +8,7 @@ QT_BEGIN_NAMESPACE
 class QDialogButtonBox;
 class QLabel;
 class QListWidget;
+class QPushButton;
 QT_END_NAMESPACE
 
 namespace keypiano::ui {
@@ -30,15 +31,21 @@ public:
 private slots:
     void browse();
     void onRecentActivated();
+    void onRecentSelectionChanged();
+    void removeSelectedRecent();
+    void clearRecents();
     void updateOkButton();
 
 private:
     void loadRecents();
     void saveRecents();
+    void refreshList();          // rebuild the list widget from recents_
     void applyPath(const QString& path);
 
     QListWidget*     recents_list_  = nullptr;
     QLabel*          path_label_    = nullptr;
+    QPushButton*     remove_btn_    = nullptr;
+    QPushButton*     clear_btn_     = nullptr;
     QDialogButtonBox* buttons_      = nullptr;
 
     QString selected_path_;

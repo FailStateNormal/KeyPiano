@@ -67,6 +67,9 @@ class KeyMap {
   // Update the label of an existing binding. No-op if vk_code is not mapped.
   void setLabel(uint32_t vk_code, const std::string& label);
 
+  // Remove the binding for `vk_code`. No-op if not mapped.
+  void removeBinding(uint32_t vk_code);
+
   const std::vector<KeyBinding>& bindings() const { return bindings_; }
 
  private:

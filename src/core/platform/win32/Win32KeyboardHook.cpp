@@ -24,6 +24,7 @@ bool Win32KeyboardHook::install(std::function<void(const KeyEvent&)> cb) {
   if (installed_.load(std::memory_order_acquire)) return false;
 
   callback_ = std::move(cb);
+  for (bool& k : key_down_) k = false;  // start with no keys held
 
   std::promise<bool> ready;
   std::future<bool>  result = ready.get_future();
@@ -98,8 +99,24 @@ LRESULT CALLBACK Win32KeyboardHook::HookProc(int nCode,
     ev.is_keydown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
     ev.is_extended = (kb->flags & LLKHF_EXTENDED) != 0;
 
+    // Filter OS auto-repeat: only forward a keydown on the leading edge (the
+    // key was not already held) and a keyup that matches a held key. This makes
+    // one physical press = one noteOn / one noteOff, so a held key sustains the
+    // note instead of retriggering it (which sounded like a wobble).
+    bool forward = true;
+    if (kb->vkCode < 256) {
+      bool* held = &s_instance_->key_down_[kb->vkCode];
+      if (ev.is_keydown) {
+        forward = !*held;   // drop repeats
+        *held = true;
+      } else {
+        forward = *held;    // drop stray keyup with no matching keydown
+        *held = false;
+      }
+    }
+
     // Callback must return quickly — the hook times out after ~300 ms.
-    s_instance_->callback_(ev);
+    if (forward) s_instance_->callback_(ev);
   }
   return CallNextHookEx(nullptr, nCode, wParam, lParam);
 }

@@ -134,6 +134,17 @@ void PianoWidget::clearLabels() {
     update();
 }
 
+void PianoWidget::setRebindMode(bool on) {
+    rebind_mode_ = on;
+    if (!on) selected_note_ = -1;
+    update();
+}
+
+void PianoWidget::setSelectedKey(int midi_note) {
+    selected_note_ = (midi_note >= 21 && midi_note <= 108) ? midi_note : -1;
+    update();
+}
+
 void PianoWidget::releaseAll() {
     for (int m : pressed_)
         fading_[m] = 255;
@@ -185,6 +196,15 @@ void PianoWidget::mousePressEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton) return;
     int midi = hitTest(event->pos());
     if (midi == -1) return;
+
+    if (rebind_mode_) {
+        // Select this key for rebinding; do not play a note.
+        selected_note_ = midi;
+        update();
+        emit keyClickedForRebind(midi);
+        return;
+    }
+
     mouse_note_ = midi;
     // Immediate visual feedback without waiting for AudioBridge poll.
     pressed_.insert(midi);
@@ -272,6 +292,14 @@ void PianoWidget::paintEvent(QPaintEvent* /*event*/) {
                 Qt::AlignHCenter | Qt::AlignVCenter,
                 it.value());
         }
+    }
+
+    // ── Rebind selection highlight (drawn on top of all keys) ─────────────────
+    if (selected_note_ >= 21 && selected_note_ <= 108) {
+        const QRect& r = rects_[selected_note_ - 21];
+        p.setPen(QPen(QColor(0xFF, 0x99, 0x22), 3));   // orange outline
+        p.setBrush(Qt::NoBrush);
+        p.drawRect(r.adjusted(1, 1, -2, -2));
     }
 }
 

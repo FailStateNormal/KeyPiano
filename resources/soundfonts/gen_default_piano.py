@@ -1,11 +1,14 @@
 """Generate a tiny General-MIDI piano SoundFont (bank 0, preset 0) from scratch.
 
 No external SF2 library — we emit the SFv2 RIFF structure directly. The sample
-is one cycle-ish of a decaying harmonic-rich waveform, looped, with a
-piano-like amplitude envelope applied per-note by the synth via the SF2
-volume envelope generators. Small (~a few hundred KB), self-contained, and
-license-free (we authored the waveform), so it can ship in the repo to give
-keypiano an out-of-the-box piano sound.
+is a single *one-shot* struck-string tone with a baked-in piano-like decay and
+NO loop. A one-shot decaying sample (rather than a looped steady tone) avoids
+the loop-boundary phase discontinuity that made sustained notes audibly wobble,
+and it sounds more piano-like (the note naturally rings down and stops).
+
+Self-contained and license-free (we authored the waveform), so it ships in the
+repo to give keypiano an out-of-the-box piano sound. Users can load a real
+open-source SoundFont via "Open SF2..." for higher quality.
 
 Output: resources/soundfonts/default_piano.sf2
 """
@@ -16,27 +19,43 @@ import os
 
 SAMPLE_RATE = 44100
 
-# ── Build one looped sample: a struck-string-ish tone at a known pitch ────────
+# ── Build one one-shot sample: a struck-string tone at a known pitch ──────────
 # Root pitch A4 = 440 Hz (MIDI 69). The synth pitch-shifts it for other notes.
 ROOT_KEY = 69
 ROOT_HZ = 440.0
+DURATION_S = 3.5  # length of the decaying tail before the note goes silent
 
 
 def make_sample():
-    # A steady (non-decaying) harmonic tone. The piano-like decay is applied by
-    # the SF2 volume envelope, not baked into the sample — so the looped body
-    # stays at full amplitude and notes are not silent when sustained.
-    # Use an integer number of cycles at ROOT_HZ so the loop is seamless.
-    cycles = 80
-    period = SAMPLE_RATE / ROOT_HZ
-    n = int(round(cycles * period))
+    # A struck-string tone: a sum of harmonics, each with its own exponential
+    # decay (higher partials fade faster, as on a real piano), plus a short
+    # attack fade-in to avoid a click. The decay is baked into the PCM and the
+    # sample is played UNLOOPED, so there is no loop seam to wobble.
+    #
+    # Decay time-constants are deliberately long so a held note keeps ringing
+    # audibly for a few seconds (the old short decay sounded almost silent once
+    # the initial transient passed).
+    n = int(SAMPLE_RATE * DURATION_S)
     t = np.arange(n) / SAMPLE_RATE
 
-    partials = [(1, 1.0), (2, 0.5), (3, 0.32), (4, 0.18),
-                (5, 0.10), (6, 0.06), (7, 0.04)]
+    # (harmonic, initial amplitude, decay time-constant in seconds)
+    partials = [
+        (1, 1.00, 2.80), (2, 0.60, 1.80), (3, 0.36, 1.25),
+        (4, 0.22, 0.95), (5, 0.14, 0.72), (6, 0.090, 0.58),
+        (7, 0.06, 0.48), (8, 0.04, 0.40),
+    ]
     wave = np.zeros(n)
-    for h, amp in partials:
-        wave += amp * np.sin(2 * math.pi * ROOT_HZ * h * t)
+    for h, amp, tau in partials:
+        wave += amp * np.exp(-t / tau) * np.sin(2 * math.pi * ROOT_HZ * h * t)
+
+    # 4 ms raised-cosine attack so the onset doesn't click.
+    a = int(SAMPLE_RATE * 0.004)
+    if a > 0:
+        wave[:a] *= 0.5 * (1.0 - np.cos(np.linspace(0.0, math.pi, a)))
+    # Short fade-out over the last 20 ms so the sample end is silent (no click).
+    f = int(SAMPLE_RATE * 0.02)
+    if f > 0:
+        wave[-f:] *= np.linspace(1.0, 0.0, f)
 
     wave /= np.max(np.abs(wave)) + 1e-9
     pcm = np.clip(wave * 32000, -32768, 32767).astype('<i2')
@@ -53,7 +72,8 @@ def _chunk(tag, data):
 
 def write_sf2(path, pcm):
     n = len(pcm)
-    # The whole sample is a steady set of whole cycles → loop it end-to-end.
+    # One-shot sample: no loop is used, but the shdr still needs valid loop
+    # fields, so point them at the (silent) tail.
     loop_start = 0
     loop_end = n - 1
 
@@ -95,19 +115,19 @@ def write_sf2(path, pcm):
     # ibag: one bag (gen index 0, mod index 0) + terminal.
     # The terminal bag's genNdx marks the end of bag 0's generators, so it must
     # equal the number of *real* generators (excluding the terminal record).
-    n_igen = 2  # sampleModes, sampleID
+    n_igen = 1  # sampleID only (no sampleModes → unlooped one-shot)
     ibag = struct.pack('<HH', 0, 0) + struct.pack('<HH', n_igen, 0)
 
     # imod: terminal only.
     imod = struct.pack('<HHHHH', 0, 0, 0, 0, 0)
 
-    # igen: minimal + reliable. Only loop the sample and point at sampleID;
-    # let FluidSynth apply its default volume envelope (tinkering with the
-    # SF2 env generators here easily yields near-silent output). The note's
-    # loudness comes from the full-scale sample itself.
-    #   54 = sampleModes (1 = loop continuously), 53 = sampleID
+    # igen: minimal + reliable. Point at the sample and let it play unlooped
+    # (sampleModes absent → 0 = no loop). The decay is baked into the PCM, and
+    # FluidSynth's default volume envelope handles attack/release. Tinkering
+    # with the SF2 env generators here easily yields near-silent output, so we
+    # avoid them.
+    #   53 = sampleID
     igen = b''
-    igen += gen(54, 1)      # loop
     igen += gen(53, 0)      # sampleID 0  (MUST be last generator)
     igen += gen(0, 0)       # terminal
 

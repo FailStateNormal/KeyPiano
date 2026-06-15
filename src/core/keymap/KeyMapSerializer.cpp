@@ -34,6 +34,13 @@ static const std::unordered_map<uint32_t, std::string>& vkNameMap() {
   return m;
 }
 
+std::string KeyMapSerializer::keyName(uint32_t vk_code) {
+  const auto& nm = vkNameMap();
+  auto it = nm.find(vk_code);
+  return (it != nm.end()) ? it->second
+                          : ("VK_" + std::to_string(vk_code));
+}
+
 // MIDI note 0-127 → "C-1", "C#3", "A4", etc.
 static std::string midiNoteToString(uint8_t note) {
   static const char* names[] = {"C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"};
@@ -48,11 +55,8 @@ std::string KeyMapSerializer::serialize(const KeyMap& map) {
   if (!map.name.empty()) out << "; " << map.name << "\n";
   out << "\n";
 
-  const auto& nm = vkNameMap();
   for (const auto& b : map.bindings()) {
-    auto it = nm.find(b.vk_code);
-    std::string keyName = (it != nm.end()) ? it->second
-                                           : ("VK_" + std::to_string(b.vk_code));
+    std::string keyName = KeyMapSerializer::keyName(b.vk_code);
     std::string ch = (b.channel == 0) ? "In_0" : "In_1";
 
     switch (b.action) {

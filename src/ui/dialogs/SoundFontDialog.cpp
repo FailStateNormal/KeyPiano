@@ -1,5 +1,7 @@
 #include "SoundFontDialog.h"
 
+#include <algorithm>
+
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -24,6 +26,18 @@ SoundFontDialog::SoundFontDialog(QWidget* parent) : QDialog(parent) {
     recents_list_->setSelectionMode(QAbstractItemView::SingleSelection);
     connect(recents_list_, &QListWidget::itemActivated,
             this, &SoundFontDialog::onRecentActivated);
+    connect(recents_list_, &QListWidget::itemSelectionChanged,
+            this, &SoundFontDialog::onRecentSelectionChanged);
+
+    remove_btn_ = new QPushButton(tr("Remove"), this);
+    remove_btn_->setEnabled(false);
+    remove_btn_->setToolTip(tr("Remove the selected entry from the recent list"));
+    connect(remove_btn_, &QPushButton::clicked,
+            this, &SoundFontDialog::removeSelectedRecent);
+
+    clear_btn_ = new QPushButton(tr("Clear All"), this);
+    connect(clear_btn_, &QPushButton::clicked,
+            this, &SoundFontDialog::clearRecents);
 
     auto* browse_btn = new QPushButton(tr("Browse..."), this);
     connect(browse_btn, &QPushButton::clicked, this, &SoundFontDialog::browse);
@@ -36,6 +50,11 @@ SoundFontDialog::SoundFontDialog(QWidget* parent) : QDialog(parent) {
     connect(buttons_, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons_, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
+    auto* recents_btns = new QHBoxLayout;
+    recents_btns->addStretch(1);
+    recents_btns->addWidget(remove_btn_);
+    recents_btns->addWidget(clear_btn_);
+
     auto* path_row = new QHBoxLayout;
     path_row->addWidget(path_label_, 1);
     path_row->addWidget(browse_btn);
@@ -43,6 +62,7 @@ SoundFontDialog::SoundFontDialog(QWidget* parent) : QDialog(parent) {
     auto* vlay = new QVBoxLayout(this);
     vlay->addWidget(recents_label);
     vlay->addWidget(recents_list_, 1);
+    vlay->addLayout(recents_btns);
     vlay->addLayout(path_row);
     vlay->addWidget(buttons_);
 
@@ -57,14 +77,31 @@ void SoundFontDialog::setInitialPath(const QString& path) {
 void SoundFontDialog::loadRecents() {
     QSettings cfg("keypiano", "keypiano");
     recents_ = cfg.value("recent_sf2").toStringList();
-    recents_list_->clear();
-    for (const auto& p : recents_)
-        recents_list_->addItem(QFileInfo(p).fileName() + "  [" + p + "]");
+
+    // Drop entries that are not valid, existing files. A relative/bare name
+    // (e.g. an old build that stored just "default_piano.sf2") or a deleted file
+    // is what made selecting a recent fail with "Failed to load SoundFont".
+    const int before = recents_.size();
+    recents_.erase(std::remove_if(recents_.begin(), recents_.end(),
+                                  [](const QString& p) {
+                                      QFileInfo fi(p);
+                                      return !fi.isAbsolute() || !fi.exists();
+                                  }),
+                   recents_.end());
+    if (recents_.size() != before) saveRecents();
+
+    refreshList();
 }
 
 void SoundFontDialog::saveRecents() {
     QSettings cfg("keypiano", "keypiano");
     cfg.setValue("recent_sf2", recents_);
+}
+
+void SoundFontDialog::refreshList() {
+    recents_list_->clear();
+    for (const auto& p : recents_)
+        recents_list_->addItem(QFileInfo(p).fileName() + "  [" + p + "]");
 }
 
 void SoundFontDialog::applyPath(const QString& path) {
@@ -77,12 +114,37 @@ void SoundFontDialog::applyPath(const QString& path) {
         recents_.removeLast();
     saveRecents();
 
-    // Refresh list widget
-    recents_list_->clear();
-    for (const auto& p : recents_)
-        recents_list_->addItem(QFileInfo(p).fileName() + "  [" + p + "]");
-
+    refreshList();
     updateOkButton();
+}
+
+void SoundFontDialog::onRecentSelectionChanged() {
+    remove_btn_->setEnabled(recents_list_->currentRow() >= 0);
+}
+
+void SoundFontDialog::removeSelectedRecent() {
+    int row = recents_list_->currentRow();
+    if (row < 0 || row >= recents_.size()) return;
+
+    const QString removed = recents_[row];
+    recents_.removeAt(row);
+    saveRecents();
+    refreshList();
+
+    // If the removed entry was the current selection, clear it.
+    if (selected_path_ == removed) {
+        selected_path_.clear();
+        path_label_->setText(tr("(none selected)"));
+    }
+    updateOkButton();
+    onRecentSelectionChanged();
+}
+
+void SoundFontDialog::clearRecents() {
+    recents_.clear();
+    saveRecents();
+    refreshList();
+    onRecentSelectionChanged();
 }
 
 void SoundFontDialog::browse() {

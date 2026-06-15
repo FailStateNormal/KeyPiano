@@ -37,6 +37,14 @@ class Win32KeyboardHook final : public KeyboardHook {
   std::function<void(const KeyEvent&)> callback_;
   std::atomic<bool>        installed_{false};
 
+  // Tracks which virtual keys are currently held, so auto-repeat WM_KEYDOWN
+  // messages (Windows resends keydown ~30x/s while a key is held) are dropped:
+  // a key already marked down that sends another keydown is a repeat, not a new
+  // press. Without this, a held key retriggers noteOn continuously, restarting
+  // the sample over and over (audible as a wobble). Touched only on the hook
+  // thread inside HookProc, so no synchronization is needed.
+  bool key_down_[256] = {};
+
   // Singleton pointer so the static HookProc can reach the instance.
   // Only one Win32KeyboardHook may be installed at a time.
   static Win32KeyboardHook* s_instance_;

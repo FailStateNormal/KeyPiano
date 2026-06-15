@@ -306,20 +306,69 @@
 - [x] VST3 Open 对话框默认开在 `C:\Program Files\Common Files\VST3` + 记住上次（QSettings vst3_dir）。
 - [x] 装了 Surge XT（winget SurgeSynth.SurgeXT），实证 VST3 编辑器嵌入成功（1141x711）+ 发声 0.347。
 
-### P5-A  可手动编辑按键映射（待办，下次开新对话做）⬜
-> 目的：用户想按左右手习惯自定义键位（左手左下、右手右上）。现有 KeyMapEditorDialog **只能改
-> 标签文字，不能重绑键→音符**。三个候选方案（下次选一个做）：
-> 1. **完整可编辑**：现有 Editor 每行可"按下新物理键重绑（抓键）"+ 下拉选音符，能增删行，
->    Apply 即时生效。最灵活，工作量最大。需扩展 KeyMapEditorDialog + 可能加抓键控件 +
->    KeyMapSerializer 存自定义 .map（持久化到 QSettings 或用户目录）。
-> 2. **琴键上点击重绑**：点钢琴键选中 → 按物理键 → 绑定。直观，专为"调手感"，但不能改控制键。
-> 3. **多套预设 map**：准备几套 .map（右手为主 / 左右手各一八度），用现有 Open Keymap 切换。
->    不做 UI，最快。
-> 注：KeyMapSerializer 已存在（写回 .map）；KeyMapParser 支持完整 FreePiano 格式。
+### P5-A  可手动编辑按键映射（2026-06-15 完成）✅
+用户定方案：**做方案 2（琴键点击重绑）+ 方案 3（多套预设，仅保留当前这套）**，重绑后**自动持久化**。
+- [x] **默认映射整体左移一个八度**：Z 行 C4→**C3**（左手）、Q 行 C5→**C4**（右手），黑键同步下移。
+      `resources/keymaps/default.map` 已改 + 注释更新（左手/右手标注）。
+- [x] **方案 2 琴键点击重绑**：菜单 File → "Rebind Keys"（可勾选）开启重绑模式。
+      `PianoWidget` 加 `setRebindMode/setSelectedKey` + `keyClickedForRebind` 信号 + 橙色选中高亮；
+      重绑模式下点琴键不发声、只选中。`MainWindow` 状态机：点琴键 `onRebindKeyClicked` 置
+      `rebind_armed_`(atomic) → 键盘钩子线程抓下一个 keydown → `QMetaObject::invokeMethod` 队列
+      marshall 回 UI 线程 `applyRebind(vk)` → 改 `keymap_`（移动语义：先删该音符旧 channel-0 绑定，
+      避免重复）→ overlay 刷新 → 存盘。**只能重绑音符键，控制键由预设覆盖（方案 2 固有边界）**。
+- [x] **自动持久化**：`KeyMap::removeBinding` 新增；`KeyMapSerializer::keyName` 暴露为 public
+      静态（vk→键名，复用进 serialize）。重绑后 `saveUserKeymap()` 写
+      `%APPDATA%\keypiano\user.map`；启动 `loadStartupKeymap()` 优先加载 user.map（解析失败回退默认）。
+- [x] **Reset Keymap to Default** 菜单项：删 user.map + 重载内置 default.map（防止自定义弹崩了出不来）。
+- [x] 验收：windows-gui-debug 构建通过、headless **72/72** 仍过；KeyMapEditorDialog 改名 "Edit Keymap **Labels**" 以区分。
+> 注：方案 3 用户只要当前「双手各一八度」这套，未另造预设——现有 Open Keymap（Ctrl+K）即可切换其它 .map。
+
+### P5-fix2  默认音色「长按晃」+ 分发包（2026-06-15）✅
+- [x] **长按声音一直晃**：根因不是混响（reverb/chorus 已关），是默认 SF2 为「稳态谐波音 + 循环」，
+      循环点周期非整数样本 → 每次回绕相位跳变 → 长按约 5Hz 抖动。改 `gen_default_piano.py`：
+      生成 **2.5s 带衰减的一次性采样（不循环，sampleModes 缺省=0）**，衰减烘焙进 PCM、谐波各自衰减、
+      4ms 起音淡入 + 20ms 收尾淡出防爆音。`MainWindow::loadDefaultSoundFont` 改为**每次启动覆盖**
+      `%APPDATA%\keypiano\default_piano.sf2`（旧逻辑只在不存在时释放，会被旧缓存遮蔽）。
+      验收：`.verify/sf2_decay_check.cpp` 实测 加载 OK、peak 0.063 有声、rms@2.0s/rms@0s=0.36（确实衰减不再稳态）、无 NaN。
+- [x] **自包含分发包（给没有 MSVC 的人）**：`cmake --build --preset windows-release` 产物
+      （build/windows-release/Release：exe + 19 运行库 DLL + platforms/styles/imageformats 插件）
+      自包含；额外打包 MSVC CRT 运行时（vcruntime140/_1、msvcp140）→ `Desktop\keypiano-win64.zip`（40.5MB）。
+      对方解压直接双击 keypiano.exe，无需 MSVC/vcpkg/Qt。Debug 运行时不可分发——必须用 Release。
+
+### P5-fix3  SF2 对话框 + 默认音色没声音（2026-06-15）✅
+- [x] **最近文件列表删不掉**：SoundFontDialog 原本只有 Browse/OK/Cancel。加 **Remove（删选中）+ Clear All
+      （清空）** 按钮；选中项才启用 Remove。loadRecents 时**自动剔除已不存在的文件路径**并回写 QSettings。
+- [x] **选 SF2 报错**：根因就是最近列表残留了不存在的旧测试 SF2 路径，点它 loadInstrument 失败。
+      上面的自动剔除 + 手动删除解决；真实存在的 SF2 加载本就正常。
+- [x] **默认打开没声音**：根因有二——(1) FluidSynth 默认 `synth.gain` 仅 0.2 太小；(2) 上版衰减太快。
+      修：`FluidSynthEngine::init` 设 `synth.gain=0.5`（对所有音色生效）；`gen_default_piano.py` 衰减
+      时间常数拉长（基频 tau 1.3→2.8s）、时长 2.5→3.5s。验收：`.verify/sf2_decay_check.cpp`（gain=0.5）
+      实测 **peak 0.063→0.158**、rms@2s=0.051 清晰可闻。重建 gui-debug+release，重打 `Desktop\keypiano-win64.zip`(40.6MB)。
 
 ### P5-B  Surge/VST3 音色选择引导（可选）⬜
 - [ ] 用户反馈 Surge 界面看不懂（那是插件自己的 GUI）。可在 docs 或 README 加"如何在 Surge
       Patch Browser 选钢琴音色"的简短说明；或长远做插件内 program 下拉。
+
+### P5-C  键位方案（map 预设）保存/删除/切换（2026-06-15）✅
+- [x] 菜单 File → "Keymap Presets" 子菜单：动态列出 `%APPDATA%\keypiano\presets\*.map`（点击即加载并设为当前），
+      + "Save Current As..."（QInputDialog 取名，非法字符替换为 _，存在则确认覆盖）
+      + "Delete Preset..."（QInputDialog 列表选择 + 确认）。复用 KeyMapSerializer/KeyMapParser。
+      加载预设后 saveUserKeymap() 写 user.map，重启后保持。验收：gui-debug 构建通过。
+
+### P6  三踏板模拟（待做）⬜
+> 目的：模拟真实钢琴的三个踏板，绑定到键盘按键（如 FreePiano 的 Sustain/Sostenuto/Soft）。
+> 音频路径涉及 MIDI CC + 发音逻辑，建议 Opus 4.8。
+- [ ] **延音踏板 Sustain（CC64）**：已有 `KeyAction::SustainSet` + `Space` 绑定基础。现状是布尔式
+      Set 0/127 写 ChannelState.sustain，但**未实际接到 FluidSynth 的 CC64**——需确认 noteOff 在踏板
+      按住时是否被正确延迟（真延音是松键不停声、抬踏板才停）。要把 sustain 真正经 controlChange(64) 下发，
+      由合成器/发音逻辑处理延音，而非仅记状态。
+- [ ] **柔音踏板 Soft / una corda（CC67）**：按下降低力度/音量。映射一个按键 → controlChange(67)。
+- [ ] **持音踏板 Sostenuto（CC66）**：只延音"按下踏板那一刻正在按的音"，后续音符不延。逻辑最复杂，
+      需在发音层快照当前按下音集合。FluidSynth 是否原生支持 CC66 需查证，否则要在 keypiano 层模拟。
+- [ ] KeyMap 扩展：新增 KeyAction（SostenutoSet / SoftSet）或统一用 controlChange 绑定；KeyMapParser/
+      Serializer 同步；默认 map 给三踏板留按键。UI：踏板状态可在 PianoWidget 下方加三个指示灯（可选）。
+- [ ] 单元测试：踏板 CC 下发、Sostenuto 音集快照、延音期间 noteOff 行为。
+- [ ] 验收：headless 测试全过 + 人工实测踩踏板手感（延音、柔音、持音三者听感正确）。
 
 ---
 

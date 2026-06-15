@@ -11,7 +11,7 @@ QString usageGuideHtmlEn() {
 press keys — it ships with a built-in piano sound, so it makes sound right away.</p>
 <ul>
 <li>The two rows of keys play two octaves. By default the <b>Z</b> row is the left
-hand (lower) and the <b>Q</b> row is the right hand (higher).</li>
+hand (lower) and the <b>Y</b> row (Y U I O P [ ]) is the right hand (higher).</li>
 <li>You can also click the on-screen piano keys with the mouse.</li>
 <li>Pedals (shown as lamps under the piano): <b>Space</b> = sustain (damper),
 <b>F3</b> = sostenuto, <b>F4</b> = soft (una corda). <b>F1</b>/<b>F2</b> shift the
@@ -89,7 +89,7 @@ QString usageGuideHtmlZh() {
 <h3>1. 快速上手</h3>
 <p>keypiano 把电脑键盘变成钢琴。打开程序后直接按键即可——它自带内置钢琴音色，开箱即响。</p>
 <ul>
-<li>两排字母键对应两个八度。默认 <b>Z</b> 这一排是左手（较低），<b>Q</b> 这一排是右手（较高）。</li>
+<li>两排字母键对应两个八度。默认 <b>Z</b> 这一排是左手（较低），<b>Y</b> 这一排（Y U I O P [ ]）是右手（较高）。</li>
 <li>也可以用鼠标点击屏幕上的琴键发声。</li>
 <li>踏板（显示为钢琴下方的指示灯）：<b>Space</b> = 延音（制音）、<b>F3</b> = 持音（sostenuto）、
 <b>F4</b> = 弱音（柔音）。<b>F1</b>/<b>F2</b> 整体降/升一个八度。踏板踩下时对应灯会亮。</li>

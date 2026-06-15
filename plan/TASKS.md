@@ -414,6 +414,13 @@
         `pedal_mode_`(atomic) + `pedal_engaged_[3]`(atomic)；handle() 仍出 momentary CC，handleKeyboardEvent
         按模式转换（toggle 时丢 keyup、翻转 engaged）。切模式/引擎重启时释放已锁踏板防止卡住。QSettings 持久化。
       - 灯亮灭、录制力度都跟着走；使用说明（中英）补踏板模式+持音用法。gui-debug /W4 /WX 干净 + 冒烟不崩。
+- [x] **（2026-06-16 追加）默认右手键位改为 Y U I O P [ ] / 7 8 0 - =**（用户定，更顺手）：
+      default.map 右手八度4 白键 `Y U I O P LBracket RBracket`=C4–B4、黑键 `7 8 0 Minus Equals`=C#4–A#4
+      （左手 Z 行不变）。`.verify/map_check.cpp` 用核心库实测：**0 错误、29 绑定、右手全部解析正确**。
+      使用说明（中英）右手描述改为 "Y row (Y U I O P [ ])"。**弱音系数 60%→35%**（用户反馈 60 不明显；
+      默认 SF2 力度曲线陡，35% 接近真实 una corda 且清晰）。
+      ⚠️ 注意：旧 `%APPDATA%\keypiano\user.map` 会优先于 default.map 加载 → 用户需 **Reset Keymap to Default**
+      才能用上新默认（或继续用自己的 user.map）。
 
 ---
 

@@ -362,10 +362,12 @@ void MainWindow::handleKeyboardEvent(const KeyEvent& kev) {
         // effect is applied below as a velocity reduction on new notes.
     }
 
-    // Soft pedal (engaged) softens new notes, since the synth does not.
+    // Soft pedal (engaged) softens new notes, since the synth does not. ~35% of
+    // the original velocity — close to a real una corda and clearly audible (the
+    // default SF2 has a steep velocity→loudness curve, so 60% was too subtle).
     if (ev.type == EventType::NoteOn &&
         pedal_engaged_[2].load(std::memory_order_relaxed)) {
-        int v = ev.vel * 3 / 5;  // ~60%
+        int v = ev.vel * 35 / 100;
         ev.vel = static_cast<uint8_t>(v < 1 ? 1 : v);
     }
 

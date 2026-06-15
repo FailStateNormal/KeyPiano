@@ -1,9 +1,9 @@
 FreePiano 2.1
 ; keypiano default keymap — QWERTY, two chromatic octaves (C3–B4)
-; White keys: Z-M row (octave 3, left hand), Q-U row (octave 4, right hand)
+; White keys: Z-M row (octave 3, left hand), Y-] row (octave 4, right hand)
 ; Black keys sit ABOVE the gap between their two white keys, matching a real
-;   piano: C#=S (between Z/X), D#=D, F#=G, G#=H, A#=J  (octave 3)
-;          C#=2 (between Q/W), D#=3, F#=5, G#=6, A#=7  (octave 4)
+;   piano: C#=S (between Z/X), D#=D, F#=G, G#=H, A#=J        (octave 3)
+;          C#=7 (between Y/U), D#=8, F#=0, G#=-, A#==        (octave 4)
 ; F1/F2 = octave down/up
 ; Pedals (hold like a real piano pedal): Space = sustain (damper),
 ;   F3 = sostenuto, F4 = soft (una corda)
@@ -36,33 +36,33 @@ Label H H
 Keydown J Note In_0 Bb3
 Label J J
 
-; ── Octave 4 – white keys (Q row, right hand) ────────────────────────────────
-Keydown Q Note In_0 C4
-Label Q Q
-Keydown W Note In_0 D4
-Label W W
-Keydown E Note In_0 E4
-Label E E
-Keydown R Note In_0 F4
-Label R R
-Keydown T Note In_0 G4
-Label T T
-Keydown Y Note In_0 A4
+; ── Octave 4 – white keys (Y row, right hand) ────────────────────────────────
+Keydown Y Note In_0 C4
 Label Y Y
-Keydown U Note In_0 B4
+Keydown U Note In_0 D4
 Label U U
+Keydown I Note In_0 E4
+Label I I
+Keydown O Note In_0 F4
+Label O O
+Keydown P Note In_0 G4
+Label P P
+Keydown LBracket Note In_0 A4
+Label LBracket [
+Keydown RBracket Note In_0 B4
+Label RBracket ]
 
 ; ── Octave 4 – black keys (number row, above the gap between white keys) ──────
-Keydown 2 Note In_0 C#4
-Label 2 2
-Keydown 3 Note In_0 Eb4
-Label 3 3
-Keydown 5 Note In_0 F#4
-Label 5 5
-Keydown 6 Note In_0 Ab4
-Label 6 6
-Keydown 7 Note In_0 Bb4
+Keydown 7 Note In_0 C#4
 Label 7 7
+Keydown 8 Note In_0 Eb4
+Label 8 8
+Keydown 0 Note In_0 F#4
+Label 0 0
+Keydown Minus Note In_0 Ab4
+Label Minus -
+Keydown Equals Note In_0 Bb4
+Label Equals =
 
 ; ── Controls ──────────────────────────────────────────────────────────────────
 Keydown F1 Octave In_0 Dec 1

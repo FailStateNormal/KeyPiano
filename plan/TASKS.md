@@ -394,7 +394,17 @@
       RMS——**不踩 0.00000 / 踩下 0.07336**，证明 CC64 确实延迟 noteOff 让音延续。VST3 后端 CC 仍为
       no-op（与既有限制一致，延后）。
 - [x] 文档：使用说明（中英）补踏板用法；windows-gui-debug 构建干净、冒烟启动加载新 default.map 不崩。
-- [ ] （可选未做）PianoWidget 下方三个踏板指示灯 + 人工实测踩踏板手感（待用户跑）。
+- [x] **（2026-06-15 追加）踏板指示灯 + 踏板可改键**（用户要求）：
+      - 新增 `src/ui/widgets/PedalIndicatorWidget`（QWidget 自绘）：钢琴下方一排三格（延音/持音/弱音），
+        踩下亮绿、显示各踏板当前绑的键（未绑显示"(无)"）。central 改为 QVBoxLayout(piano 拉伸 + pedal 固定 58)。
+        踏板灯亮灭由 hook 路径检测 CC64/66/67 后 marshal 到 UI 线程点亮。
+      - **踏板改键**：rebind 流程扩展——重绑模式下点踏板格（`onRebindPedalClicked`）→ 按一个键 → 绑成该踏板
+        （`applyRebind` 按 `rebind_pedal_cc_` 分支，move 语义删旧键）。原来"只能绑音符"的限制解除。
+        `updatePedalLabels()` 在 keymap 变更时刷新灯下的键名。I18n 补延音/持音/弱音等。
+      - 验收：DPI 感知截图实证三踏板格渲染正确（用户当前 user.map 缺 Space → "延音(无)"，正好暴露问题）。
+        **踩踏板手感人工实测仍待用户跑。**
+      > 验证踩坑记：本机 150% 缩放，PowerShell 默认 DPI 不感知 → CopyFromScreen/GetWindowRect 坐标错位，
+      > 整窗截图会把底部状态栏+踏板条截掉。**截图脚本必须先 `SetProcessDPIAware()`**，否则误判控件没渲染。
 
 ---
 

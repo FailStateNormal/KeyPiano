@@ -7,6 +7,7 @@ add_library(keypiano_ui STATIC
     bridge/AudioBridge.cpp
     widgets/PianoWidget.cpp
     widgets/KeyboardOverlayWidget.cpp
+    widgets/PedalIndicatorWidget.cpp
     widgets/Vst3EditorWindow.cpp
     dialogs/SoundFontDialog.cpp
     dialogs/SettingsDialog.cpp

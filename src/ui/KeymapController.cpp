@@ -20,6 +20,7 @@
 #include "keymap/KeyMapParser.h"
 #include "keymap/KeyMapSerializer.h"
 #include "widgets/KeyboardOverlayWidget.h"
+#include "widgets/PedalIndicatorWidget.h"
 #include "widgets/PianoWidget.h"
 
 namespace keypiano::ui {
@@ -31,15 +32,38 @@ QString midiNoteLabel(int note) {
     if (note < 0 || note > 127) return QStringLiteral("?");
     return QStringLiteral("%1%2").arg(n[note % 12]).arg(note / 12 - 1);
 }
+
+// CC number (64/66/67) → the matching pedal KeyAction. KeyAction::Note for a
+// non-pedal cc (caller checks first).
+KeyAction pedalActionForCc(int cc) {
+    switch (cc) {
+        case 64: return KeyAction::SustainPedal;
+        case 66: return KeyAction::SostenutoPedal;
+        case 67: return KeyAction::SoftPedal;
+        default: return KeyAction::Note;
+    }
+}
+
+// Human pedal name for status messages (translated).
+QString pedalName(int cc) {
+    switch (cc) {
+        case 64: return QObject::tr("Sustain");
+        case 66: return QObject::tr("Sostenuto");
+        case 67: return QObject::tr("Soft");
+        default: return QStringLiteral("?");
+    }
+}
 }  // namespace
 
 KeymapController::KeymapController(QWidget* dialog_parent, QObject* parent)
     : QObject(parent), dialog_parent_(dialog_parent) {}
 
 void KeymapController::setWidgets(PianoWidget* piano,
-                                  KeyboardOverlayWidget* overlay) {
+                                  KeyboardOverlayWidget* overlay,
+                                  PedalIndicatorWidget* pedals) {
     piano_   = piano;
     overlay_ = overlay;
+    pedals_  = pedals;
 }
 
 void KeymapController::setActions(QAction* rebind, QAction* clear,
@@ -60,8 +84,26 @@ void KeymapController::setActiveKeymap(KeyMap km) {
     keymap_ = std::move(km);
     publishKeymap();  // hand the input thread a fresh immutable snapshot
     if (overlay_) overlay_->updateFromKeyMap(keymap_);
+    updatePedalLabels();
     if (act_rebind_) act_rebind_->setEnabled(true);
     if (act_clear_)  act_clear_->setEnabled(true);
+}
+
+void KeymapController::updatePedalLabels() {
+    if (!pedals_) return;
+    // Default each lamp to "unbound", then fill in the key bound to each pedal.
+    QString keys[3];  // indexed by cc 64/66/67
+    for (const auto& b : keymap_.bindings()) {
+        int idx = -1;
+        if (b.action == KeyAction::SustainPedal)        idx = 0;
+        else if (b.action == KeyAction::SostenutoPedal) idx = 1;
+        else if (b.action == KeyAction::SoftPedal)      idx = 2;
+        if (idx >= 0)
+            keys[idx] = QString::fromStdString(KeyMapSerializer::keyName(b.vk_code));
+    }
+    pedals_->setPedalKey(64, keys[0]);
+    pedals_->setPedalKey(66, keys[1]);
+    pedals_->setPedalKey(67, keys[2]);
 }
 
 // ── Loading ─────────────────────────────────────────────────────────────────────
@@ -164,13 +206,19 @@ void KeymapController::toggleRebind(bool on) {
     rebind_mode_ = on;
     rebind_armed_.store(false, std::memory_order_release);
     rebind_note_ = -1;
+    rebind_pedal_cc_ = -1;
     if (piano_) {
         piano_->setRebindMode(on);
         piano_->setSelectedKey(-1);
     }
+    if (pedals_) {
+        pedals_->setRebindMode(on);
+        pedals_->setSelectedPedal(-1);
+    }
     if (on)
         emit status(
-            tr("Rebind: click a piano key, then press the keyboard key to assign."),
+            tr("Rebind: click a piano key or pedal, then press the keyboard key "
+               "to assign."),
             0);
     else
         emit status(QString(), 0);  // clear
@@ -192,10 +240,24 @@ void KeymapController::toggleClear(bool on) {
 void KeymapController::onRebindKeyClicked(int midi_note) {
     if (!rebind_mode_) return;
     rebind_note_ = midi_note;
+    rebind_pedal_cc_ = -1;                       // a note, not a pedal
     rebind_armed_.store(true, std::memory_order_release);
-    if (piano_) piano_->setSelectedKey(midi_note);
+    if (piano_)  piano_->setSelectedKey(midi_note);
+    if (pedals_) pedals_->setSelectedPedal(-1);
     emit status(
         tr("Press a keyboard key to bind to %1...").arg(midiNoteLabel(midi_note)),
+        0);
+}
+
+void KeymapController::onRebindPedalClicked(int cc) {
+    if (!rebind_mode_) return;
+    rebind_pedal_cc_ = cc;
+    rebind_note_ = -1;                           // a pedal, not a note
+    rebind_armed_.store(true, std::memory_order_release);
+    if (pedals_) pedals_->setSelectedPedal(cc);
+    if (piano_)  piano_->setSelectedKey(-1);
+    emit status(
+        tr("Press a keyboard key to bind to the %1 pedal...").arg(pedalName(cc)),
         0);
 }
 
@@ -226,11 +288,45 @@ void KeymapController::applyClear(uint32_t vk_code) {
     keymap_.removeBinding(vk_code);
     publishKeymap();  // republish so the hook stops sounding the cleared key
     if (overlay_) overlay_->updateFromKeyMap(keymap_);
+    updatePedalLabels();  // the cleared key may have been a pedal
     saveUserKeymap();
     emit status(tr("Cleared binding for %1.").arg(key), 3000);
 }
 
 void KeymapController::applyRebind(uint32_t vk_code) {
+    const QString key =
+        QString::fromStdString(KeyMapSerializer::keyName(vk_code));
+
+    if (rebind_pedal_cc_ >= 0) {
+        // ── Pedal rebind ────────────────────────────────────────────────────
+        const int cc = rebind_pedal_cc_;
+        const KeyAction act = pedalActionForCc(cc);
+
+        // Move semantics: drop any other key currently bound to this pedal.
+        std::vector<uint32_t> stale;
+        for (const auto& b : keymap_.bindings())
+            if (b.action == act && b.vk_code != vk_code)
+                stale.push_back(b.vk_code);
+        for (uint32_t vk : stale) keymap_.removeBinding(vk);
+
+        KeyBinding kb;
+        kb.vk_code = vk_code;
+        kb.action  = act;
+        kb.channel = 0;
+        keymap_.addBinding(kb);  // overwrites whatever this key did before
+
+        publishKeymap();
+        if (overlay_) overlay_->updateFromKeyMap(keymap_);
+        updatePedalLabels();
+        if (pedals_) pedals_->setSelectedPedal(-1);
+        rebind_pedal_cc_ = -1;
+
+        saveUserKeymap();
+        emit status(tr("Bound %1 -> the %2 pedal").arg(key).arg(pedalName(cc)),
+                    3000);
+        return;
+    }
+
     if (rebind_note_ < 0) return;
     const uint8_t note = static_cast<uint8_t>(rebind_note_);
 
@@ -255,15 +351,12 @@ void KeymapController::applyRebind(uint32_t vk_code) {
 
     publishKeymap();  // republish the snapshot so the hook sees the new binding
     if (overlay_) overlay_->updateFromKeyMap(keymap_);
+    updatePedalLabels();  // the key may have been a pedal before
     if (piano_) piano_->setSelectedKey(-1);
     rebind_note_ = -1;
 
     saveUserKeymap();
-    emit status(
-        tr("Bound %1 -> %2")
-            .arg(QString::fromStdString(KeyMapSerializer::keyName(vk_code)))
-            .arg(midiNoteLabel(note)),
-        3000);
+    emit status(tr("Bound %1 -> %2").arg(key).arg(midiNoteLabel(note)), 3000);
 }
 
 void KeymapController::resetToDefault() {

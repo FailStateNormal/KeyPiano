@@ -20,6 +20,7 @@ namespace keypiano::ui {
 
 class PianoWidget;
 class KeyboardOverlayWidget;
+class PedalIndicatorWidget;
 
 // Owns everything about the active key map: the editable working copy, the
 // immutable snapshot the keyboard-hook thread reads, persistence (user.map +
@@ -35,7 +36,8 @@ public:
     explicit KeymapController(QWidget* dialog_parent, QObject* parent = nullptr);
 
     // One-time wiring once the widgets / menu actions exist.
-    void setWidgets(PianoWidget* piano, KeyboardOverlayWidget* overlay);
+    void setWidgets(PianoWidget* piano, KeyboardOverlayWidget* overlay,
+                    PedalIndicatorWidget* pedals);
     void setActions(QAction* rebind, QAction* clear, QMenu* preset_menu);
 
     // Load the user's saved user.map, falling back to the bundled default.
@@ -65,6 +67,7 @@ public slots:
     void toggleClear(bool on);    // File ▸ Clear Key Binding
     void resetToDefault();        // File ▸ Reset Keymap to Default
     void onRebindKeyClicked(int midi_note);  // PianoWidget click in rebind mode
+    void onRebindPedalClicked(int cc);       // PedalIndicatorWidget click in rebind mode
     void savePreset();
     void deletePreset();
     void loadPreset(const QString& name);
@@ -79,6 +82,7 @@ private:
     void publishKeymap();           // store a fresh immutable snapshot from keymap_
     void applyRebind(uint32_t vk_code);  // UI thread (marshalled from the hook)
     void applyClear(uint32_t vk_code);   // UI thread (marshalled from the hook)
+    void updatePedalLabels();            // refresh which key each pedal lamp shows
     void saveUserKeymap();
     QString userKeymapPath() const;  // %APPDATA%/keypiano/user.map
     QString presetsDir() const;      // %APPDATA%/keypiano/presets
@@ -86,6 +90,7 @@ private:
     QWidget*               dialog_parent_ = nullptr;
     PianoWidget*           piano_   = nullptr;
     KeyboardOverlayWidget* overlay_ = nullptr;
+    PedalIndicatorWidget*  pedals_  = nullptr;
     QAction*               act_rebind_ = nullptr;
     QAction*               act_clear_  = nullptr;
     QMenu*                 preset_menu_ = nullptr;
@@ -99,7 +104,8 @@ private:
     // only on the UI thread.
     bool              rebind_mode_ = false;  // "Rebind Keys" toggle active
     int               rebind_note_ = -1;     // piano key chosen, awaiting a key
-    std::atomic<bool> rebind_armed_{false};  // a piano key is selected
+    int               rebind_pedal_cc_ = -1; // pedal lamp chosen, awaiting a key
+    std::atomic<bool> rebind_armed_{false};  // a piano key / pedal is selected
     // Clear-binding mode: while on, the hook thread swallows every mapped key and
     // its binding is removed. Read on the hook thread (atomic).
     std::atomic<bool> clear_mode_{false};

@@ -36,6 +36,7 @@
 #include "bridge/AudioBridge.h"
 #include "widgets/PianoWidget.h"
 #include "widgets/KeyboardOverlayWidget.h"
+#include "widgets/PedalIndicatorWidget.h"
 #include "widgets/Vst3EditorWindow.h"
 #include "dialogs/SoundFontDialog.h"
 #include "dialogs/SettingsDialog.h"
@@ -320,6 +321,18 @@ void MainWindow::handleKeyboardEvent(const KeyEvent& kev) {
     if (!res.midi) return;
     MidiEvent ev = *res.midi;
 
+    // Light the pedal lamp for a pedal CC (64/66/67). Marshalled to the UI thread.
+    if (ev.type == EventType::ControlChange &&
+        (ev.note == 64 || ev.note == 66 || ev.note == 67)) {
+        const int  cc = ev.note;
+        const bool on = ev.vel >= 64;
+        QMetaObject::invokeMethod(
+            this, [this, cc, on] {
+                if (pedal_widget_) pedal_widget_->setPedalState(cc, on);
+            },
+            Qt::QueuedConnection);
+    }
+
     if (recorder_ && recorder_->state() == Recorder::State::Recording) {
         using namespace std::chrono;
         ev.ts_us = duration_cast<microseconds>(
@@ -418,8 +431,16 @@ void MainWindow::startEngine(const audio::AudioEngine::Config& cfg) {
 
 void MainWindow::setupPianoWidget() {
     piano_widget_ = new PianoWidget(this);
-    // Replace the placeholder central widget from the .ui file.
-    setCentralWidget(piano_widget_);
+    pedal_widget_ = new PedalIndicatorWidget(this);
+
+    // Central widget = piano on top, pedal indicator strip below it.
+    auto* central = new QWidget(this);
+    auto* col = new QVBoxLayout(central);
+    col->setContentsMargins(0, 0, 0, 0);
+    col->setSpacing(0);
+    col->addWidget(piano_widget_, /*stretch=*/1);
+    col->addWidget(pedal_widget_, /*stretch=*/0);
+    setCentralWidget(central);
 
     if (audio_bridge_) {
         connect(audio_bridge_.get(), &AudioBridge::noteActivated,
@@ -443,11 +464,13 @@ void MainWindow::setupPianoWidget() {
 
     connect(piano_widget_, &PianoWidget::keyClickedForRebind,
             keymap_ctl_, &KeymapController::onRebindKeyClicked);
+    connect(pedal_widget_, &PedalIndicatorWidget::pedalClickedForRebind,
+            keymap_ctl_, &KeymapController::onRebindPedalClicked);
 
     overlay_ = new KeyboardOverlayWidget(piano_widget_);
 
-    // The controller drives the overlay + selection highlight during rebind.
-    keymap_ctl_->setWidgets(piano_widget_, overlay_);
+    // The controller drives the overlay + pedal lamps + selection highlight.
+    keymap_ctl_->setWidgets(piano_widget_, overlay_, pedal_widget_);
 }
 
 void MainWindow::loadDefaultSoundFont() {
@@ -789,6 +812,7 @@ void MainWindow::retranslateUi() {
 
     // Dynamic submenu (re-tr()'s "(no saved presets)", "Save Current As...", ...).
     if (keymap_ctl_) keymap_ctl_->rebuildPresetMenu();
+    if (pedal_widget_) pedal_widget_->update();  // repaint pedal names in new lang
 
     // Status-bar instrument label (refreshes the " (built-in)" suffix). Latency
     // and CPU labels are refreshed on the next 500 ms status tick.

@@ -31,6 +31,7 @@ QT_END_NAMESPACE
 namespace keypiano::ui { class AudioBridge; }
 namespace keypiano::ui { class PianoWidget; }
 namespace keypiano::ui { class KeyboardOverlayWidget; }
+namespace keypiano::ui { class PedalIndicatorWidget; }
 namespace keypiano::ui { class Vst3EditorWindow; }
 namespace keypiano::ui { class KeymapController; }
 
@@ -115,6 +116,7 @@ private:
 
     PianoWidget*             piano_widget_  = nullptr;
     KeyboardOverlayWidget*   overlay_       = nullptr;
+    PedalIndicatorWidget*    pedal_widget_  = nullptr;
     Vst3EditorWindow*        editor_window_ = nullptr;  // nulled on destroy
 
     // Owns the active key map (working copy + immutable hook-thread snapshot),

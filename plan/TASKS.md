@@ -405,6 +405,15 @@
         **踩踏板手感人工实测仍待用户跑。**
       > 验证踩坑记：本机 150% 缩放，PowerShell 默认 DPI 不感知 → CopyFromScreen/GetWindowRect 坐标错位，
       > 整窗截图会把底部状态栏+踏板条截掉。**截图脚本必须先 `SetProcessDPIAware()`**，否则误判控件没渲染。
+- [x] **（2026-06-16 追加）弱音真正生效 + 踏板模式设置**（用户反馈持音/弱音没影响）：
+      - **离线实测**（`.verify/pedal_check2.cpp`）：**持音 CC66 FluidSynth 原生正常**（按住音→踩→松键，rms 0.071
+        继续响；踩了再弹的音 0.0 不保持），用户没注意是因为持音本身隐蔽有条件。**弱音 CC67 FluidSynth 根本没实现**
+        （踩不踩 rms 完全一样 ratio 1.0）→ 改在**我们层**实现：踩下弱音时把后续 NoteOn 力度压到 60%
+        （handleKeyboardEvent，hook 线程读 `pedal_engaged_[soft]` atomic）。
+      - **踏板模式** File→"Pedal Mode"：Hold（按住生效）/ Toggle（按一下踩、再按一下抬，键盘更顺手）。
+        `pedal_mode_`(atomic) + `pedal_engaged_[3]`(atomic)；handle() 仍出 momentary CC，handleKeyboardEvent
+        按模式转换（toggle 时丢 keyup、翻转 engaged）。切模式/引擎重启时释放已锁踏板防止卡住。QSettings 持久化。
+      - 灯亮灭、录制力度都跟着走；使用说明（中英）补踏板模式+持音用法。gui-debug /W4 /WX 干净 + 冒烟不崩。
 
 ---
 

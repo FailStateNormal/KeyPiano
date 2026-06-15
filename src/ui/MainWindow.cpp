@@ -80,6 +80,8 @@ MainWindow::MainWindow(QWidget* parent)
     ui_->setupUi(this);
     setWindowIcon(QIcon(":/icons/app.png"));
 
+    for (auto& e : pedal_engaged_) e.store(false, std::memory_order_relaxed);
+
     keymap_ctl_ = new KeymapController(this, this);
     connect(keymap_ctl_, &KeymapController::status, this,
             [this](const QString& msg, int timeout) {
@@ -95,6 +97,7 @@ MainWindow::MainWindow(QWidget* parent)
     setupPianoWidget();
     keymap_ctl_->loadStartup();
     loadDefaultSoundFont();
+    loadPedalModeSetting();
     loadLanguageSetting();  // re-apply the language chosen in a previous session
 
     status_timer_ = new QTimer(this);
@@ -171,6 +174,19 @@ void MainWindow::setupMenus() {
     preset_menu_ = file_menu_->addMenu(tr("Key&map Presets"));
     keymap_ctl_->setActions(act_rebind_, act_clear_, preset_menu_);
     keymap_ctl_->rebuildPresetMenu();
+
+    // Pedal behaviour: Hold (momentary) vs Toggle (press on/off).
+    pedal_mode_menu_ = file_menu_->addMenu(tr("&Pedal Mode"));
+    act_pedal_hold_ = pedal_mode_menu_->addAction(tr("&Hold (press and release)"));
+    act_pedal_hold_->setCheckable(true);
+    connect(act_pedal_hold_, &QAction::triggered, this,
+            [this] { setPedalMode(PedalMode::Hold); });
+    act_pedal_toggle_ =
+        pedal_mode_menu_->addAction(tr("&Toggle (press once on, again off)"));
+    act_pedal_toggle_->setCheckable(true);
+    connect(act_pedal_toggle_, &QAction::triggered, this,
+            [this] { setPedalMode(PedalMode::Toggle); });
+    act_pedal_hold_->setChecked(true);  // default until loadPedalModeSetting
 
     file_menu_->addSeparator();
 
@@ -321,16 +337,36 @@ void MainWindow::handleKeyboardEvent(const KeyEvent& kev) {
     if (!res.midi) return;
     MidiEvent ev = *res.midi;
 
-    // Light the pedal lamp for a pedal CC (64/66/67). Marshalled to the UI thread.
-    if (ev.type == EventType::ControlChange &&
-        (ev.note == 64 || ev.note == 66 || ev.note == 67)) {
-        const int  cc = ev.note;
-        const bool on = ev.vel >= 64;
+    // ── Pedals ──────────────────────────────────────────────────────────────
+    // handle() emits a pedal CC as 127 on key-down and 0 on key-up (momentary).
+    // Apply the chosen mode and track each pedal's engaged state here.
+    if (const int idx = pedalIndex(ev.type == EventType::ControlChange ? ev.note : -1);
+        idx >= 0) {
+        bool engage;
+        if (pedal_mode_.load(std::memory_order_relaxed) == PedalMode::Toggle) {
+            if (!kev.is_keydown) return;  // toggle acts on press only; drop release
+            engage = !pedal_engaged_[idx].load(std::memory_order_relaxed);
+        } else {
+            engage = kev.is_keydown;      // hold: down engages, up releases
+        }
+        pedal_engaged_[idx].store(engage, std::memory_order_relaxed);
+        ev.vel = engage ? 127 : 0;        // CC value the synth receives
+
+        const int cc = ev.note;
         QMetaObject::invokeMethod(
-            this, [this, cc, on] {
-                if (pedal_widget_) pedal_widget_->setPedalState(cc, on);
+            this, [this, cc, engage] {
+                if (pedal_widget_) pedal_widget_->setPedalState(cc, engage);
             },
             Qt::QueuedConnection);
+        // Note: CC67 (soft) is sent on too, but FluidSynth ignores it — the soft
+        // effect is applied below as a velocity reduction on new notes.
+    }
+
+    // Soft pedal (engaged) softens new notes, since the synth does not.
+    if (ev.type == EventType::NoteOn &&
+        pedal_engaged_[2].load(std::memory_order_relaxed)) {
+        int v = ev.vel * 3 / 5;  // ~60%
+        ev.vel = static_cast<uint8_t>(v < 1 ? 1 : v);
     }
 
     if (recorder_ && recorder_->state() == Recorder::State::Recording) {
@@ -406,6 +442,13 @@ void MainWindow::startEngine(const audio::AudioEngine::Config& cfg) {
     recorder_ = std::make_unique<Recorder>(
         Recorder::makeAudioDispatch(engine_.get()));
     installHook();
+
+    // The new synth starts with no pedals down — clear our state + lamps to match.
+    for (int i = 0; i < 3; ++i) {
+        pedal_engaged_[i].store(false, std::memory_order_relaxed);
+        static const int cc[3] = {64, 66, 67};
+        if (pedal_widget_) pedal_widget_->setPedalState(cc[i], false);
+    }
 
     audio_bridge_ = std::make_unique<AudioBridge>(engine_.get());
     audio_bridge_->start();
@@ -778,6 +821,32 @@ void MainWindow::loadLanguageSetting() {
     setLanguage(saved == "zh" ? Lang::Chinese : Lang::English);
 }
 
+void MainWindow::setPedalMode(PedalMode mode) {
+    pedal_mode_.store(mode, std::memory_order_relaxed);
+
+    // Release any pedal that might be latched, so switching modes never strands a
+    // pedal "down" on the synth (and stops soft-pedal velocity scaling).
+    static const int cc[3] = {64, 66, 67};
+    for (int i = 0; i < 3; ++i) {
+        if (pedal_engaged_[i].exchange(false, std::memory_order_relaxed)) {
+            if (engine_)
+                engine_->postControlChange(0, static_cast<uint8_t>(cc[i]), 0);
+            if (pedal_widget_) pedal_widget_->setPedalState(cc[i], false);
+        }
+    }
+
+    if (act_pedal_hold_)   act_pedal_hold_->setChecked(mode == PedalMode::Hold);
+    if (act_pedal_toggle_) act_pedal_toggle_->setChecked(mode == PedalMode::Toggle);
+    QSettings("keypiano", "keypiano")
+        .setValue("pedal_mode", mode == PedalMode::Toggle ? "toggle" : "hold");
+}
+
+void MainWindow::loadPedalModeSetting() {
+    const QString s = QSettings("keypiano", "keypiano")
+                          .value("pedal_mode", "hold").toString();
+    setPedalMode(s == "toggle" ? PedalMode::Toggle : PedalMode::Hold);
+}
+
 void MainWindow::retranslateUi() {
     // Menus and submenus.
     if (file_menu_)   file_menu_->setTitle(tr("&File"));
@@ -798,6 +867,11 @@ void MainWindow::retranslateUi() {
         act_clear_->setText(tr("C&lear Key Binding (press a key to remove)"));
     if (act_reset_keymap_)
         act_reset_keymap_->setText(tr("Reset Keymap to &Default"));
+    if (pedal_mode_menu_) pedal_mode_menu_->setTitle(tr("&Pedal Mode"));
+    if (act_pedal_hold_)
+        act_pedal_hold_->setText(tr("&Hold (press and release)"));
+    if (act_pedal_toggle_)
+        act_pedal_toggle_->setText(tr("&Toggle (press once on, again off)"));
     if (act_settings_)    act_settings_->setText(tr("&Settings..."));
     if (act_exit_)        act_exit_->setText(tr("E&xit"));
 

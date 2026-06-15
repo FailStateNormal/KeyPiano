@@ -13,9 +13,15 @@ press keys — it ships with a built-in piano sound, so it makes sound right awa
 <li>The two rows of keys play two octaves. By default the <b>Z</b> row is the left
 hand (lower) and the <b>Q</b> row is the right hand (higher).</li>
 <li>You can also click the on-screen piano keys with the mouse.</li>
-<li>Pedals work like a real piano — <b>hold</b> the key down: <b>Space</b> =
-sustain (damper), <b>F3</b> = sostenuto, <b>F4</b> = soft (una corda).
-<b>F1</b>/<b>F2</b> shift the octave down/up.</li>
+<li>Pedals (shown as lamps under the piano): <b>Space</b> = sustain (damper),
+<b>F3</b> = sostenuto, <b>F4</b> = soft (una corda). <b>F1</b>/<b>F2</b> shift the
+octave down/up. A lamp lights while its pedal is engaged.</li>
+<li><b>File &rarr; Pedal Mode</b> sets how pedal keys behave: <b>Hold</b> (engaged
+only while you hold the key) or <b>Toggle</b> (press once to engage, again to
+release — handier on a keyboard).</li>
+<li>Sostenuto only sustains the notes already held the moment you engage it (hold
+a chord, engage F3, release the keys — that chord keeps ringing while new notes
+do not). Soft makes notes you then play quieter.</li>
 </ul>
 
 <h3>2. Changing the sound</h3>
@@ -85,8 +91,12 @@ QString usageGuideHtmlZh() {
 <ul>
 <li>两排字母键对应两个八度。默认 <b>Z</b> 这一排是左手（较低），<b>Q</b> 这一排是右手（较高）。</li>
 <li>也可以用鼠标点击屏幕上的琴键发声。</li>
-<li>踏板像真钢琴一样——<b>按住</b>对应键即生效：<b>Space</b> = 延音（制音踏板）、
-<b>F3</b> = 持音（sostenuto）、<b>F4</b> = 弱音（柔音踏板）。<b>F1</b>/<b>F2</b> 整体降/升一个八度。</li>
+<li>踏板（显示为钢琴下方的指示灯）：<b>Space</b> = 延音（制音）、<b>F3</b> = 持音（sostenuto）、
+<b>F4</b> = 弱音（柔音）。<b>F1</b>/<b>F2</b> 整体降/升一个八度。踏板踩下时对应灯会亮。</li>
+<li><b>文件 &rarr; 踏板模式</b>可设置踏板键的行为：<b>按住</b>（按着才生效）或
+<b>切换</b>（按一下踩下、再按一下抬起——键盘上更顺手）。</li>
+<li>持音只保持你踩下那一刻正按着的音（按住一个和弦→踩 F3→松开手，这个和弦会继续响，而之后新弹的音不受影响）。
+弱音会让你之后弹的音变轻。</li>
 </ul>
 
 <h3>2. 更换音色</h3>

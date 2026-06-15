@@ -63,6 +63,10 @@ private slots:
     void updateStatus();
 
 private:
+    // How a pedal key behaves: Hold = engaged while held; Toggle = press toggles
+    // engaged on/off (handier on a keyboard you press by hand).
+    enum class PedalMode { Hold, Toggle };
+
     void setupMenus();
     void setupHelpMenu();
     // Switch the UI language (installs/removes the embedded translator, persists
@@ -70,6 +74,9 @@ private:
     void setLanguage(Lang lang);
     void loadLanguageSetting();   // apply the language saved from a previous run
     void retranslateUi();         // re-set every string built in code
+    // Switch pedal behaviour; releases any latched pedals and persists the choice.
+    void setPedalMode(PedalMode mode);
+    void loadPedalModeSetting();  // apply the pedal mode saved from a previous run
     void refreshSf2Label();       // rebuild the status-bar instrument label
     void setupToolBar();
     void setupStatusBar();
@@ -128,6 +135,17 @@ private:
     ChannelState ch0_{};
     ChannelState ch1_{};
 
+    // Pedal behaviour mode (enum declared at the top of the private section).
+    std::atomic<PedalMode> pedal_mode_{PedalMode::Hold};  // UI writes, hook reads
+    // Engaged state per pedal, indexed sustain=0 / sostenuto=1 / soft=2. Written
+    // on the hook thread; the soft flag is also read there to scale note velocity.
+    std::atomic<bool> pedal_engaged_[3];
+
+    // Index 0/1/2 ↔ CC 64/66/67. Returns -1 if cc is not a pedal.
+    static int pedalIndex(int cc) {
+        return cc == 64 ? 0 : cc == 66 ? 1 : cc == 67 ? 2 : -1;
+    }
+
     // Set just before startRecording() so the hook thread can compute ts_us
     // for each captured event (happens-before guaranteed via atomic state_).
     std::chrono::steady_clock::time_point record_start_{};
@@ -149,6 +167,9 @@ private:
     QAction* act_clear_       = nullptr;
     QAction* act_reset_keymap_ = nullptr;
     QMenu*   preset_menu_     = nullptr;  // dynamic list of saved keymap presets
+    QMenu*   pedal_mode_menu_ = nullptr;
+    QAction* act_pedal_hold_   = nullptr;
+    QAction* act_pedal_toggle_ = nullptr;
     QAction* act_settings_    = nullptr;
     QAction* act_exit_        = nullptr;
     QAction* act_rec_start_   = nullptr;

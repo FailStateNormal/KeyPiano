@@ -32,6 +32,7 @@ namespace keypiano::ui { class AudioBridge; }
 namespace keypiano::ui { class PianoWidget; }
 namespace keypiano::ui { class KeyboardOverlayWidget; }
 namespace keypiano::ui { class Vst3EditorWindow; }
+namespace keypiano::ui { class KeymapController; }
 
 namespace keypiano::ui {
 
@@ -52,14 +53,6 @@ private slots:
     void onOpenSf2();
     void onOpenVst3();
     void onShowPluginEditor();
-    void onOpenKeymap();
-    void onEditKeymap();
-    void onToggleRebind(bool on);
-    void onResetKeymap();
-    void onRebindKeyClicked(int midi_note);
-    void onSavePreset();
-    void onDeletePreset();
-    void onLoadPreset(const QString& name);
     void onOpenSettings();
     void onStartRecording();
     void onStop();
@@ -81,25 +74,12 @@ private:
     void setupStatusBar();
     void setupEngine();
     void setupPianoWidget();
-    void loadStartupKeymap();   // prefer the user's saved user.map, else the default
-    void loadDefaultKeymap();   // load embedded :/keymaps/default.map
-    // Adopt `km` as the active keymap: updates the UI working copy, publishes an
-    // immutable snapshot for the input thread, refreshes the overlay, and enables
-    // the keymap-dependent menu actions. The single funnel for every keymap change.
-    void setActiveKeymap(KeyMap km);
-    void publishKeymap();       // store a fresh shared snapshot from keymap_
     // Runs on the keyboard-hook thread: routes one key event through the keymap
-    // snapshot to the engine / recorder / record-toggle. No UI-thread state is
-    // touched directly (record toggles are marshalled back to the UI thread).
+    // snapshot (owned by keymap_ctl_) to the engine / recorder / record-toggle.
+    // No UI-thread state is touched directly (rebind capture and record toggles
+    // are marshalled back to the UI thread).
     void handleKeyboardEvent(const KeyEvent& kev);
     void toggleRecordFromHotkey();  // UI-thread: start/stop recording from a Record key
-    QString userKeymapPath() const;  // %APPDATA%/keypiano/user.map
-    QString presetsDir() const;      // %APPDATA%/keypiano/presets
-    void rebuildPresetMenu();        // repopulate the Presets submenu from disk
-    void saveUserKeymap();           // serialize keymap_ to user.map (rebind persistence)
-    // Applies a captured physical key to the note selected for rebinding. Called
-    // on the UI thread (marshalled from the hook thread via a queued invoke).
-    void applyRebind(uint32_t vk_code);
     void loadDefaultSoundFont();// load embedded piano SF2 so the app is audible out of the box
     void syncRecordActions();
 
@@ -137,22 +117,14 @@ private:
     KeyboardOverlayWidget*   overlay_       = nullptr;
     Vst3EditorWindow*        editor_window_ = nullptr;  // nulled on destroy
 
-    // UI-thread working copy, edited in place by load/edit/rebind/preset actions.
-    KeyMap       keymap_;
-    // Immutable snapshot the hook thread reads. UI publishes a new shared_ptr
-    // after every edit; the hook atomically loads it — no lock, no data race on
-    // keymap_ itself (which the UI thread keeps mutating).
-    std::atomic<std::shared_ptr<const KeyMap>> keymap_ptr_;
+    // Owns the active key map (working copy + immutable hook-thread snapshot),
+    // persistence (user.map/presets), and the click-to-rebind flow.
+    KeymapController* keymap_ctl_ = nullptr;
+
     // Only ever touched on the hook thread (octave/velocity/key-signature
     // actions mutate them; resolve reads them).
     ChannelState ch0_{};
     ChannelState ch1_{};
-
-    // Rebind state. rebind_armed_ is read on the hook thread (atomic); rebind_note_
-    // and rebind_mode_ are touched only on the UI thread.
-    bool              rebind_mode_  = false;  // "Rebind Keys" toggle active
-    int               rebind_note_  = -1;     // piano key chosen, awaiting a phys key
-    std::atomic<bool> rebind_armed_{false};   // a piano key is selected; capture next key
 
     // Set just before startRecording() so the hook thread can compute ts_us
     // for each captured event (happens-before guaranteed via atomic state_).

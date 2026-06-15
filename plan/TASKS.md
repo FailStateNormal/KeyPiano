@@ -421,8 +421,14 @@
 - [x] **HelpContent 拆出**：使用说明 HTML 从 MainWindow.cpp 移到 `src/ui/HelpContent.h/.cpp`
       （`keypiano::ui::usageGuideHtmlEn/Zh`），MainWindow 瘦约 90 行。
 - [x] **VST3 诚实**：使用说明（中英）补一句"踏板/CC 目前仅 SF2 引擎生效，VST3 暂不下发"。
-- [未做/有意压住] SynthController/KeymapController/RecordingController 三拆、SynthSession、SynthCapabilities
-      结构体——风险高或属过早抽象，留作后续增量。`record_start_` 已有 seq_cst happens-before，非 bug，未动。
+- [x] **KeymapController 拆出**（用户定：只拆这一个，放 src/ui 做 QObject 子类）：
+      `src/ui/KeymapController.h/.cpp` 接管 keymap 工作副本 + 原子快照 + user.map/preset 持久化 + 点击重绑。
+      对 hook 线程暴露线程安全 `snapshot()`/`tryCaptureRebind()`；UI 槽用 `status(QString,int)` 信号发回状态栏。
+      MainWindow 仅保留 hook 通道状态 ch0_/ch1_ + `handleKeyboardEvent`（碰 engine/recorder）。
+      action/preset_menu 仍由 MainWindow 建（菜单序+retranslate），triggered 连到控制器槽。
+      **MainWindow.cpp 1044→715 行**（−327）。gui-debug /WX 干净 + 冒烟启动不崩（未做人工键入/重绑实测）。
+- [未做/有意压住] SynthController/RecordingController、SynthSession、SynthCapabilities 结构体——
+      牵涉音频/VST 生命周期或属过早抽象，留后续增量。`record_start_` 已有 seq_cst happens-before，非 bug，未动。
 - [x] 验收：windows-gui-debug `/W4 /WX` 干净 + 冒烟启动不崩；headless 82/82。
 
 ---

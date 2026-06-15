@@ -32,15 +32,13 @@
 
 #include "HelpContent.h"
 #include "I18n.h"
+#include "KeymapController.h"
 #include "bridge/AudioBridge.h"
 #include "widgets/PianoWidget.h"
 #include "widgets/KeyboardOverlayWidget.h"
 #include "widgets/Vst3EditorWindow.h"
 #include "dialogs/SoundFontDialog.h"
-#include "dialogs/KeyMapEditorDialog.h"
 #include "dialogs/SettingsDialog.h"
-#include "keymap/KeyMapParser.h"
-#include "keymap/KeyMapSerializer.h"
 #include "recorder/KpsFormat.h"
 #include "synth/IPluginEditor.h"
 #include "synth/SynthFactory.h"
@@ -50,13 +48,6 @@ namespace {
 // QSettings key storing the folder the "Open VST3" dialog last used. Persisted
 // in the registry (HKCU) so it survives restarts and re-installs.
 constexpr auto kVst3DirKey = "vst3_dir";
-
-// MIDI note number → human label like "C3" / "Eb4" (for status messages).
-QString midiNoteLabel(int note) {
-    static const char* n[] = {"C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"};
-    if (note < 0 || note > 127) return QStringLiteral("?");
-    return QStringLiteral("%1%2").arg(n[note % 12]).arg(note / 12 - 1);
-}
 
 // Where the "Open VST3 Instrument" dialog should start:
 //   1. the user's last-used folder (if it still exists), else
@@ -88,13 +79,20 @@ MainWindow::MainWindow(QWidget* parent)
     ui_->setupUi(this);
     setWindowIcon(QIcon(":/icons/app.png"));
 
+    keymap_ctl_ = new KeymapController(this, this);
+    connect(keymap_ctl_, &KeymapController::status, this,
+            [this](const QString& msg, int timeout) {
+                if (msg.isEmpty()) statusBar()->clearMessage();
+                else               statusBar()->showMessage(msg, timeout);
+            });
+
     setupMenus();
     setupToolBar();
     setupHelpMenu();
     setupStatusBar();
     setupEngine();
     setupPianoWidget();
-    loadStartupKeymap();
+    keymap_ctl_->loadStartup();
     loadDefaultSoundFont();
     loadLanguageSetting();  // re-apply the language chosen in a previous session
 
@@ -144,28 +142,33 @@ void MainWindow::setupMenus() {
 
     act_open_keymap_ = new QAction(tr("Open &Keymap..."), this);
     act_open_keymap_->setShortcut(QKeySequence("Ctrl+K"));
-    connect(act_open_keymap_, &QAction::triggered, this, &MainWindow::onOpenKeymap);
+    connect(act_open_keymap_, &QAction::triggered,
+            keymap_ctl_, &KeymapController::openKeymap);
     file_menu_->addAction(act_open_keymap_);
 
     act_edit_keymap_ = new QAction(tr("&Edit Keymap Labels..."), this);
     act_edit_keymap_->setEnabled(false);  // enabled after a keymap is loaded
-    connect(act_edit_keymap_, &QAction::triggered, this, &MainWindow::onEditKeymap);
+    connect(act_edit_keymap_, &QAction::triggered,
+            keymap_ctl_, &KeymapController::editLabels);
     file_menu_->addAction(act_edit_keymap_);
 
     act_rebind_ = new QAction(tr("Re&bind Keys (click a key, then press)"), this);
     act_rebind_->setCheckable(true);
     act_rebind_->setEnabled(false);  // enabled after a keymap is loaded
-    connect(act_rebind_, &QAction::toggled, this, &MainWindow::onToggleRebind);
+    connect(act_rebind_, &QAction::toggled,
+            keymap_ctl_, &KeymapController::toggleRebind);
     file_menu_->addAction(act_rebind_);
 
     act_reset_keymap_ = new QAction(tr("Reset Keymap to &Default"), this);
-    connect(act_reset_keymap_, &QAction::triggered, this, &MainWindow::onResetKeymap);
+    connect(act_reset_keymap_, &QAction::triggered,
+            keymap_ctl_, &KeymapController::resetToDefault);
     file_menu_->addAction(act_reset_keymap_);
 
     // Presets: save the current layout under a name, switch between saved
-    // layouts, or delete one. Entries are populated from disk in rebuildPresetMenu().
+    // layouts, or delete one. The controller owns the contents; we own the QMenu.
     preset_menu_ = file_menu_->addMenu(tr("Key&map Presets"));
-    rebuildPresetMenu();
+    keymap_ctl_->setActions(act_edit_keymap_, act_rebind_, preset_menu_);
+    keymap_ctl_->rebuildPresetMenu();
 
     file_menu_->addSeparator();
 
@@ -296,20 +299,14 @@ void MainWindow::installHook() {
 }
 
 void MainWindow::handleKeyboardEvent(const KeyEvent& kev) {
-    // Rebind capture: if a piano key is waiting for a physical key, grab the next
-    // keydown and hand it to the UI thread instead of playing a note.
-    if (kev.is_keydown &&
-        rebind_armed_.exchange(false, std::memory_order_acq_rel)) {
-        const uint32_t vk = kev.vk_code;
-        QMetaObject::invokeMethod(
-            this, [this, vk] { applyRebind(vk); }, Qt::QueuedConnection);
-        return;
-    }
+    // Rebind capture: if a piano key is waiting for a physical key, the controller
+    // grabs this keydown (marshalling to the UI thread) instead of playing a note.
+    if (kev.is_keydown && keymap_ctl_->tryCaptureRebind(kev.vk_code)) return;
 
-    // Read the immutable keymap snapshot — never keymap_, which the UI thread
-    // mutates concurrently. handle() also applies octave/velocity/key-signature
-    // actions to ch0_/ch1_ (hook-thread-owned) and flags Record toggles.
-    auto snap = keymap_ptr_.load(std::memory_order_acquire);
+    // Read the immutable keymap snapshot — never the controller's working copy,
+    // which the UI thread mutates concurrently. handle() also applies octave/
+    // velocity/key-signature actions to ch0_/ch1_ (hook-owned) and flags Records.
+    auto snap = keymap_ctl_->snapshot();
     if (!snap) return;
     KeyResult res = snap->handle(kev.vk_code, kev.is_keydown, ch0_, ch1_);
 
@@ -442,76 +439,12 @@ void MainWindow::setupPianoWidget() {
     }
 
     connect(piano_widget_, &PianoWidget::keyClickedForRebind,
-            this, &MainWindow::onRebindKeyClicked);
+            keymap_ctl_, &KeymapController::onRebindKeyClicked);
 
     overlay_ = new KeyboardOverlayWidget(piano_widget_);
-}
 
-void MainWindow::loadDefaultKeymap() {
-    QFile f(":/keymaps/default.map");
-    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
-    const QByteArray map_text = f.readAll();
-
-    auto result = KeyMapParser::parse(map_text.toStdString());
-    if (!result.errors.empty()) {
-        // The bundled default map should always parse cleanly; surface any
-        // regression instead of silently shipping a broken default.
-        QString msg;
-        for (const auto& e : result.errors)
-            msg += QString::fromStdString(e) + "\n";
-        QMessageBox::warning(this, tr("Default Keymap"),
-                             tr("Bundled default keymap has issues:\n%1")
-                                 .arg(msg.trimmed()));
-    }
-    setActiveKeymap(std::move(result.map));
-}
-
-void MainWindow::setActiveKeymap(KeyMap km) {
-    keymap_ = std::move(km);
-    publishKeymap();  // hand the input thread a fresh immutable snapshot
-    if (overlay_) overlay_->updateFromKeyMap(keymap_);
-    if (act_edit_keymap_) act_edit_keymap_->setEnabled(true);
-    if (act_rebind_)      act_rebind_->setEnabled(true);
-}
-
-void MainWindow::publishKeymap() {
-    keymap_ptr_.store(std::make_shared<const KeyMap>(keymap_),
-                      std::memory_order_release);
-}
-
-void MainWindow::loadStartupKeymap() {
-    // Prefer the user's saved customisations from a previous session; fall back
-    // to the bundled default if none exists or it fails to parse cleanly.
-    const QString user = userKeymapPath();
-    if (QFile::exists(user)) {
-        std::ifstream f(user.toStdString());
-        if (f) {
-            std::ostringstream ss;
-            ss << f.rdbuf();
-            auto result = KeyMapParser::parse(ss.str());
-            if (result.errors.empty()) {
-                setActiveKeymap(std::move(result.map));
-                return;
-            }
-        }
-    }
-    loadDefaultKeymap();
-}
-
-QString MainWindow::userKeymapPath() const {
-    const QString dir =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return dir + "/user.map";
-}
-
-void MainWindow::saveUserKeymap() {
-    const QString dir =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QDir().mkpath(dir);
-    const std::string text = KeyMapSerializer::serialize(keymap_);
-    QFile f(userKeymapPath());
-    if (f.open(QIODevice::WriteOnly | QIODevice::Text))
-        f.write(text.data(), static_cast<qint64>(text.size()));
+    // The controller drives the overlay + selection highlight during rebind.
+    keymap_ctl_->setWidgets(piano_widget_, overlay_);
 }
 
 void MainWindow::loadDefaultSoundFont() {
@@ -695,208 +628,6 @@ void MainWindow::updateEditorAction() {
     act_show_editor_->setEnabled(editor && editor->hasEditor());
 }
 
-void MainWindow::onEditKeymap() {
-    KeyMapEditorDialog dlg(keymap_, this);
-    if (dlg.exec() != QDialog::Accepted) return;
-    setActiveKeymap(dlg.keyMap());
-    statusBar()->showMessage(tr("Keymap labels updated."), 2000);
-}
-
-void MainWindow::onToggleRebind(bool on) {
-    rebind_mode_ = on;
-    rebind_armed_.store(false, std::memory_order_release);
-    rebind_note_ = -1;
-    if (piano_widget_) {
-        piano_widget_->setRebindMode(on);
-        piano_widget_->setSelectedKey(-1);
-    }
-    if (on)
-        statusBar()->showMessage(
-            tr("Rebind: click a piano key, then press the keyboard key to assign."));
-    else
-        statusBar()->clearMessage();
-}
-
-void MainWindow::onRebindKeyClicked(int midi_note) {
-    if (!rebind_mode_) return;
-    rebind_note_ = midi_note;
-    rebind_armed_.store(true, std::memory_order_release);
-    if (piano_widget_) piano_widget_->setSelectedKey(midi_note);
-    statusBar()->showMessage(
-        tr("Press a keyboard key to bind to %1...").arg(midiNoteLabel(midi_note)));
-}
-
-void MainWindow::applyRebind(uint32_t vk_code) {
-    if (rebind_note_ < 0) return;
-    const uint8_t note = static_cast<uint8_t>(rebind_note_);
-
-    // Move semantics: drop any existing channel-0 Note binding for this note so
-    // it relocates to the new key instead of sounding from two keys at once.
-    std::vector<uint32_t> stale;
-    for (const auto& b : keymap_.bindings()) {
-        if (b.action == KeyAction::Note && b.channel == 0 &&
-            b.midi_note == note && b.vk_code != vk_code)
-            stale.push_back(b.vk_code);
-    }
-    for (uint32_t vk : stale) keymap_.removeBinding(vk);
-
-    // Bind the captured physical key to the note (overwrites its old action).
-    KeyBinding kb;
-    kb.vk_code   = vk_code;
-    kb.action    = KeyAction::Note;
-    kb.channel   = 0;
-    kb.midi_note = note;
-    kb.label     = KeyMapSerializer::keyName(vk_code);
-    keymap_.addBinding(kb);
-
-    publishKeymap();  // republish the snapshot so the hook sees the new binding
-    if (overlay_) overlay_->updateFromKeyMap(keymap_);
-    if (piano_widget_) piano_widget_->setSelectedKey(-1);
-    rebind_note_ = -1;
-
-    saveUserKeymap();
-    statusBar()->showMessage(
-        tr("Bound %1 -> %2")
-            .arg(QString::fromStdString(KeyMapSerializer::keyName(vk_code)))
-            .arg(midiNoteLabel(note)),
-        3000);
-}
-
-void MainWindow::onResetKeymap() {
-    if (QMessageBox::question(
-            this, tr("Reset Keymap"),
-            tr("Discard your custom key bindings and restore the default layout?"))
-        != QMessageBox::Yes)
-        return;
-
-    if (act_rebind_->isChecked()) act_rebind_->setChecked(false);  // exit rebind
-    QFile::remove(userKeymapPath());
-    loadDefaultKeymap();
-    statusBar()->showMessage(tr("Keymap reset to default."), 3000);
-}
-
-QString MainWindow::presetsDir() const {
-    const QString dir =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
-        + "/presets";
-    return dir;
-}
-
-void MainWindow::rebuildPresetMenu() {
-    if (!preset_menu_) return;
-    preset_menu_->clear();
-
-    // Saved presets first (each loads itself on click), then management actions.
-    QDir dir(presetsDir());
-    const QStringList files =
-        dir.entryList({"*.map"}, QDir::Files, QDir::Name);
-    if (files.isEmpty()) {
-        QAction* none = preset_menu_->addAction(tr("(no saved presets)"));
-        none->setEnabled(false);
-    } else {
-        for (const QString& f : files) {
-            const QString name = QFileInfo(f).completeBaseName();
-            QAction* a = preset_menu_->addAction(name);
-            connect(a, &QAction::triggered, this,
-                    [this, name] { onLoadPreset(name); });
-        }
-    }
-
-    preset_menu_->addSeparator();
-    QAction* save = preset_menu_->addAction(tr("Save Current As..."));
-    connect(save, &QAction::triggered, this, &MainWindow::onSavePreset);
-    QAction* del = preset_menu_->addAction(tr("Delete Preset..."));
-    connect(del, &QAction::triggered, this, &MainWindow::onDeletePreset);
-}
-
-void MainWindow::onSavePreset() {
-    bool ok = false;
-    const QString name = QInputDialog::getText(
-        this, tr("Save Keymap Preset"), tr("Preset name:"),
-        QLineEdit::Normal, {}, &ok);
-    if (!ok || name.trimmed().isEmpty()) return;
-
-    // Keep the name filesystem-safe (it becomes <name>.map).
-    QString safe = name.trimmed();
-    safe.replace(QRegularExpression(R"([\\/:*?"<>|])"), "_");
-
-    QDir().mkpath(presetsDir());
-    const QString path = presetsDir() + "/" + safe + ".map";
-    if (QFile::exists(path) &&
-        QMessageBox::question(
-            this, tr("Overwrite Preset"),
-            tr("A preset named \"%1\" already exists. Overwrite it?").arg(safe))
-            != QMessageBox::Yes)
-        return;
-
-    const std::string text = KeyMapSerializer::serialize(keymap_);
-    QFile f(path);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QMessageBox::critical(this, tr("Error"),
-                              tr("Could not write preset:\n%1").arg(path));
-        return;
-    }
-    f.write(text.data(), static_cast<qint64>(text.size()));
-    f.close();
-
-    rebuildPresetMenu();
-    statusBar()->showMessage(tr("Saved preset: %1").arg(safe), 3000);
-}
-
-void MainWindow::onLoadPreset(const QString& name) {
-    const QString path = presetsDir() + "/" + name + ".map";
-    std::ifstream f(path.toStdString());
-    if (!f) {
-        QMessageBox::critical(this, tr("Error"),
-                              tr("Cannot read preset:\n%1").arg(path));
-        rebuildPresetMenu();  // it may have been deleted externally
-        return;
-    }
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    auto result = KeyMapParser::parse(ss.str());
-    if (!result.errors.empty()) {
-        QString msg;
-        for (const auto& e : result.errors)
-            msg += QString::fromStdString(e) + "\n";
-        QMessageBox::warning(this, tr("Preset Warnings"), msg.trimmed());
-    }
-    setActiveKeymap(std::move(result.map));
-    // Loading a preset becomes the active layout; persist it as user.map so it
-    // survives a restart (matching the rebind auto-save behaviour).
-    saveUserKeymap();
-    statusBar()->showMessage(tr("Loaded preset: %1").arg(name), 3000);
-}
-
-void MainWindow::onDeletePreset() {
-    QDir dir(presetsDir());
-    const QStringList files =
-        dir.entryList({"*.map"}, QDir::Files, QDir::Name);
-    if (files.isEmpty()) {
-        QMessageBox::information(this, tr("Delete Preset"),
-                                 tr("There are no saved presets."));
-        return;
-    }
-    QStringList names;
-    for (const QString& f : files) names << QFileInfo(f).completeBaseName();
-
-    bool ok = false;
-    const QString name = QInputDialog::getItem(
-        this, tr("Delete Preset"), tr("Preset to delete:"), names, 0,
-        /*editable=*/false, &ok);
-    if (!ok || name.isEmpty()) return;
-
-    if (QMessageBox::question(
-            this, tr("Delete Preset"),
-            tr("Delete preset \"%1\"? This cannot be undone.").arg(name))
-        != QMessageBox::Yes)
-        return;
-
-    QFile::remove(presetsDir() + "/" + name + ".map");
-    rebuildPresetMenu();
-    statusBar()->showMessage(tr("Deleted preset: %1").arg(name), 3000);
-}
-
 void MainWindow::onOpenSettings() {
     SettingsDialog dlg(audio_cfg_, this);
     if (dlg.exec() != QDialog::Accepted) return;
@@ -907,32 +638,6 @@ void MainWindow::onOpenSettings() {
         return;
     restartEngine(new_cfg);
     statusBar()->showMessage(tr("Audio settings applied."), 3000);
-}
-
-void MainWindow::onOpenKeymap() {
-    QString path = QFileDialog::getOpenFileName(
-        this, tr("Open Keymap"), {},
-        tr("Keymap files (*.map);;All files (*)"));
-    if (path.isEmpty()) return;
-
-    std::ifstream f(path.toStdString());
-    if (!f) {
-        QMessageBox::critical(this, tr("Error"),
-                              tr("Cannot read keymap:\n%1").arg(path));
-        return;
-    }
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    auto result = KeyMapParser::parse(ss.str());
-    if (!result.errors.empty()) {
-        QString msg;
-        for (const auto& e : result.errors)
-            msg += QString::fromStdString(e) + "\n";
-        QMessageBox::warning(this, tr("Keymap Warnings"), msg.trimmed());
-    }
-    setActiveKeymap(std::move(result.map));
-    statusBar()->showMessage(
-        tr("Loaded keymap: %1").arg(QFileInfo(path).fileName()), 3000);
 }
 
 void MainWindow::onStartRecording() {
@@ -1079,7 +784,7 @@ void MainWindow::retranslateUi() {
     if (act_about_)       act_about_->setText(tr("&About keypiano..."));
 
     // Dynamic submenu (re-tr()'s "(no saved presets)", "Save Current As...", ...).
-    rebuildPresetMenu();
+    if (keymap_ctl_) keymap_ctl_->rebuildPresetMenu();
 
     // Status-bar instrument label (refreshes the " (built-in)" suffix). Latency
     // and CPU labels are refreshed on the next 500 ms status tick.

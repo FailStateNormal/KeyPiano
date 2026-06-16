@@ -19,3 +19,4 @@ keypiano_add_test(test_recorder)           # P2-B
 #
 # P7-3: failure-path / lifecycle coverage
 keypiano_add_test(test_audio_engine)       # event-queue drop counting
+keypiano_add_test(test_audio_callback)     # feedback-queue drop counting

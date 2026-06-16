@@ -564,16 +564,29 @@
       踏板块里，当 `engage && current_backend_==Vst3 && (idx==0||1)`（延音/持音）时，marshal 到 UI 线程在状态栏提示
       4 秒「VST3 乐器不支持延音/持音踏板（弱音踏板仍然有效）」；I18n 加中文。软踏板(idx 2)走 velocity 缩减、不提示。
       `current_backend_` 在 hook 线程读安全（切后端先卸 hook）。验收：gui-debug `/W4 /WX` 干净 + 冒烟启动正常。
-- [ ] **⑤ 抽 AudioSession/SynthController**（中高/高，第二阶段）——长期正确方向，但用「小步迁移」，
-      等 ② 后端切换回滚改完再顺手收 `stopEngine/startEngine/synth_` 重复逻辑，不一次拆穿 MainWindow。
-- [~] **⑥ 生命周期/失败路径测试（2026-06-16，部分完成）**——用户选择「跳过 ⑤，先做 ⑥ 可做的部分」。
-      core 测试套件无 UI/无音频设备/无外部文件，能做的失败路径有限：
-        - **已补**：`tests/test_audio_engine.cpp`（3 个）测 ③ 的 `event_drops` 计数——engine 不 open（无回调排空队列），
-          posts 超过 `kEventQueueCapacity`(1024) 即丢弃并计数；顺带验证队列恰好容纳 1024、各 post* 变体都计入、初值为 0。
-        - **已覆盖（之前）**：KpsFormat 读缺失文件 / 写坏路径 / 中文路径往返；Recorder 缺文件 / 超容量。
-      **仍缺（需 ⑤ 先抽出 SynthController 才好测）**：后端切换失败回滚（②）、切后端 UAF、hook 生命周期——这些是 UI 层、
-      依赖 MainWindow 真实引擎，headless 测不了。`feedback_drops`（audio 回调里计）也暂未单测（需构造 CallbackContext）。
-      验收：headless **86/86**（+3）。
+- [x] **⑤ 抽 SynthController（2026-06-16，已完成）**——把 synth/engine/bridge 生命周期 + 后端切换回滚 +
+      SF2/VST3 加载 + VST3 编辑器整体搬进 `src/ui/SynthController.{h,cpp}`（QObject 子类，MainWindow 子对象）。
+      **保留时序铁律**：engine 拆/装是唯一线程敏感处（audio 回调 + hook 线程都摸 engine_/synth_）。控制器通过宿主
+      提供的两个**同步回调**在与旧 `stopEngine/startEngine` 完全相同的时点调用，顺序不变：
+        - `Host::beforeEngineStop`（每次拆卸最先调）：卸 hook（join 线程）+ 释放 recorder，再由控制器停 bridge、关 engine。
+        - `Host::afterEngineStart`（重启后调，engine 为 null 表示打开失败）：重建 recorder → 装 hook → 复位踏板 →
+          重连 bridge→piano。recorder 先于 hook，杜绝 hook 线程喂到旧 recorder。
+      **MainWindow 仅留** hook_（其回调 handleKeyboardEvent 在 MainWindow）+ 踏板/钢琴控件 + 状态栏 label。
+      构造顺序调整：先 `setupPianoWidget()` 再 `initialize()`，使首次启动时 afterEngineStart 能连上已存在的钢琴控件
+      （删掉 setupPianoWidget 里旧的初始 bridge→piano 连接，统一由 afterEngineStart 负责）。
+      `onOpenSf2/onOpenVst3` 仅留对话框，加载+回滚委托给 `loadSf2/loadVst3`（错误文案经 *err 返回给 MainWindow 弹窗）。
+      **MainWindow.cpp 879→约 685 行**；新增 SynthController ~330 行。验收：gui-debug `/W4 /WX` 干净 +
+      冒烟启动 5s 存活、CloseMainWindow 有序拆卸退出码 0 + headless **90/90**。**切后端/回滚/插件编辑器人工实测待用户跑。**
+      [遗留] engine 仍直建真 `AudioEngine`（WASAPI），故后端切换/UAF/hook 生命周期的 headless 测试仍需引入
+      `IAudioEngine` 注入缝才能做，本轮未引入（属更大重构）。
+- [x] **⑥ 生命周期/失败路径测试（2026-06-16，完成本阶段可做部分）**：
+        - **已补**：`tests/test_audio_engine.cpp`（3 个）测 ③ `event_drops`；`tests/test_audio_callback.cpp`（4 个，本轮）
+          测 ⑥ 的 `feedback_drops`——`audioCallback` 是自由函数，用桩 synth + 自建 CallbackContext/队列直接驱动，
+          **无需音频设备**：fq 填满后 drain 事件即丢弃并精确计数、有空位不丢且转发、ControlChange 不产生反馈、初值 0 且每次 render 一次。
+        - **已覆盖（之前）**：KpsFormat 读缺失/写坏路径/中文路径往返；Recorder 缺文件/超容量。
+      **仍缺（需 ⑤ 之上再引入 IAudioEngine 注入缝）**：后端切换失败回滚（②）、切后端 UAF、hook 生命周期——
+      SynthController 已隔离这些逻辑，但 startEngine 仍开真 AudioEngine，headless 测需注入假引擎。
+      验收：headless **90/90**（+4）。
 - [暂缓] Qt `.ts/.qm` 国际化迁移（手写 I18n 仍能撑）、完整 VST3 CC/踏板实现（涉及参数映射+插件兼容，先提示限制）。
 - [x] **bugfix：鼠标点击的音符现在能被录制（2026-06-16）**——根因：键盘走 `handleKeyboardEvent→feed()`，
       而 `setupPianoWidget` 的鼠标 lambda 只 `engine_->postNoteOn/Off`、漏喂 recorder。修：鼠标 lambda 也

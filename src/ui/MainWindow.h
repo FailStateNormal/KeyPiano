@@ -10,7 +10,6 @@
 #include "audio/AudioEngine.h"
 #include "keymap/KeyMap.h"
 #include "platform/KeyboardHook.h"
-#include "synth/SynthesizerBase.h"
 
 #include "I18n.h"
 
@@ -30,9 +29,9 @@ namespace keypiano::ui { class AudioBridge; }
 namespace keypiano::ui { class PianoWidget; }
 namespace keypiano::ui { class KeyboardOverlayWidget; }
 namespace keypiano::ui { class PedalIndicatorWidget; }
-namespace keypiano::ui { class Vst3EditorWindow; }
 namespace keypiano::ui { class KeymapController; }
 namespace keypiano::ui { class RecordingController; }
+namespace keypiano::ui { class SynthController; }
 
 namespace keypiano::ui {
 
@@ -76,54 +75,40 @@ private:
     void refreshSf2Label();       // rebuild the status-bar instrument label
     void setupToolBar();
     void setupStatusBar();
-    void setupEngine();
     void setupPianoWidget();
     // Runs on the keyboard-hook thread: routes one key event through the keymap
     // snapshot (owned by keymap_ctl_) to the engine / recorder / record-toggle.
     // No UI-thread state is touched directly (rebind capture and record toggles
     // are marshalled back to the UI thread).
     void handleKeyboardEvent(const KeyEvent& kev);
-    void loadDefaultSoundFont();// load embedded piano SF2 so the app is audible out of the box
-    // Absolute path to the bundled GeneralUser GS piano next to the exe, or empty
-    // if it isn't there. Shared by loadDefaultSoundFont() and the Open SF2 dialog
-    // (which pins it as a "built-in default" entry).
-    QString bundledDefaultSf2Path() const;
 
-    // Closes + detaches the VST3 plug-in editor window if open. Must be called
-    // before synth_ is replaced or destroyed (the editor view references it).
-    void closePluginEditor();
+    // Rebuilds the status-bar instrument label from SynthController's state. Kept
+    // in MainWindow because it owns the label + the recorder title.
+    // (declared below near the status-bar members)
+
     // Enables/disables the "Show Plugin Editor" action based on the backend.
     void updateEditorAction();
 
-    // Extracts the hook installation (lambda) so it can be reused on restart.
+    // Installs the keyboard hook (routes keys to handleKeyboardEvent). Reused by
+    // SynthController's afterEngineStart callback on every engine (re)start.
     void installHook();
-
-    // Tear down + reopen the engine with a new config (= stopEngine + startEngine).
-    void restartEngine(const audio::AudioEngine::Config& cfg);
-
-    // Stop the audio engine (and bridge/hook/recorder). After this returns the
-    // audio callback is stopped, so synth_ may be safely replaced or destroyed.
-    // Splitting stop/start lets a backend switch swap synth_ *between* them,
-    // avoiding a use-after-free of the synth the callback is still touching.
-    void stopEngine();
-    void startEngine(const audio::AudioEngine::Config& cfg);
 
     Ui::MainWindow* ui_ = nullptr;
 
-    // Declaration order controls construction sequence:
-    //   synth_ → engine_ → hook_ → audio_bridge_
-    // Destruction runs in reverse, so audio_bridge_ (timer) stops before engine_.
-    // The Recorder lives in rec_ctl_; closeEvent()/stopEngine() release it (after
-    // the hook is uninstalled) before engine_ is torn down.
-    std::unique_ptr<SynthesizerBase>    synth_;
-    std::unique_ptr<audio::AudioEngine> engine_;
-    std::unique_ptr<KeyboardHook>       hook_;
-    std::unique_ptr<AudioBridge>        audio_bridge_;
+    // The keyboard hook is owned here because handleKeyboardEvent() (its callback)
+    // lives in MainWindow. SynthController owns the synth/engine/bridge; it calls
+    // back into MainWindow (beforeEngineStop/afterEngineStart) to uninstall/install
+    // this hook at the exact points required for thread safety.
+    std::unique_ptr<KeyboardHook> hook_;
+
+    // Owns the synth backend, audio engine, bridge and instrument state. Created in
+    // the constructor; the host callbacks are wired via attach() once the widgets
+    // it coordinates (piano/pedal) and the recorder controller exist.
+    SynthController* synth_ctl_ = nullptr;
 
     PianoWidget*             piano_widget_  = nullptr;
     KeyboardOverlayWidget*   overlay_       = nullptr;
     PedalIndicatorWidget*    pedal_widget_  = nullptr;
-    Vst3EditorWindow*        editor_window_ = nullptr;  // nulled on destroy
 
     // Owns the active key map (working copy + immutable hook-thread snapshot),
     // persistence (user.map/presets), and the click-to-rebind flow.
@@ -155,31 +140,6 @@ private:
     // is not engaged.
     uint8_t softVelocity(int vel) const;
 
-    // Which synth backend is currently active (drives Open SF2 / Open VST3).
-    enum class Backend { FluidSynth, Vst3 };
-    Backend current_backend_ = Backend::FluidSynth;
-
-    // ── Transactional backend switching ──────────────────────────────────────
-    // Tears down the running engine and brings it back up on a freshly-built
-    // `target` backend (no instrument loaded yet). Returns true if the engine
-    // came back up. Building the new backend BEFORE proving the instrument loads
-    // is not possible (AudioEngine::open() re-init()s the synth, which would wipe
-    // a pre-loaded FluidSynth font), so the Open SF2 / Open VST3 flows instead
-    // attempt the switch and, on a load failure, call restoreInstrument() to put
-    // the previous working backend back — the user is never left without sound.
-    bool rebuildBackend(Backend target);
-
-    // A snapshot of the active instrument, enough to rebuild it if a backend
-    // switch fails. `path` is the SF2 file / VST3 bundle (empty => built-in).
-    struct InstrumentState {
-        Backend backend = Backend::FluidSynth;
-        QString path;
-        QString name;
-        bool    builtin = false;
-    };
-    InstrumentState currentInstrument() const;         // capture the live state
-    void restoreInstrument(const InstrumentState& s);  // rebuild + reload + relabel
-
     QMenu*   file_menu_       = nullptr;
     QMenu*   rec_menu_        = nullptr;
     QMenu*   help_menu_       = nullptr;
@@ -210,8 +170,6 @@ private:
     Lang        lang_       = Lang::English;
     Translator* translator_ = nullptr;  // installed only in Chinese mode
 
-    audio::AudioEngine::Config audio_cfg_;  // last-applied engine config
-
     QLabel* lbl_latency_  = nullptr;
     QLabel* lbl_cpu_      = nullptr;
     QLabel* lbl_sf2_name_ = nullptr;
@@ -220,15 +178,6 @@ private:
     QLabel* lbl_drops_    = nullptr;
 
     QTimer*  status_timer_     = nullptr;
-    QString  current_sf2_name_ = "(none)";
-    bool     sf2_builtin_      = false;  // current instrument is the embedded default
-    // Full path of the user-loaded SF2 (empty for the built-in default). Used to
-    // pre-select the right entry when reopening the dialog — must be a real path,
-    // not the display name, or it pollutes the recent list with an invalid entry.
-    QString  current_sf2_path_;
-    // Full path of the active VST3 bundle (empty unless a VST3 backend is live).
-    // Kept so a failed backend switch can roll back to the previous VST3 plug-in.
-    QString  current_vst3_path_;
 };
 
 } // namespace keypiano::ui

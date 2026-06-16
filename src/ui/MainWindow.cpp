@@ -34,16 +34,14 @@
 #include "I18n.h"
 #include "KeymapController.h"
 #include "RecordingController.h"
+#include "SynthController.h"
 #include "bridge/AudioBridge.h"
 #include "widgets/PianoWidget.h"
 #include "widgets/KeyboardOverlayWidget.h"
 #include "widgets/PedalIndicatorWidget.h"
-#include "widgets/Vst3EditorWindow.h"
 #include "dialogs/SoundFontDialog.h"
 #include "dialogs/SettingsDialog.h"
 #include "recorder/Recorder.h"
-#include "synth/IPluginEditor.h"
-#include "synth/SynthFactory.h"
 
 namespace {
 
@@ -97,14 +95,72 @@ MainWindow::MainWindow(QWidget* parent)
                 else               statusBar()->showMessage(msg, timeout);
             });
 
+    synth_ctl_ = new SynthController(this);
+    connect(synth_ctl_, &SynthController::status, this,
+            [this](const QString& msg, int timeout) {
+                if (msg.isEmpty()) statusBar()->clearMessage();
+                else               statusBar()->showMessage(msg, timeout);
+            });
+
     setupMenus();
     setupToolBar();
     setupHelpMenu();
     setupStatusBar();
-    setupEngine();
+    // Build the piano/pedal widgets BEFORE starting the engine: the engine's
+    // afterEngineStart callback connects the audio bridge → piano signals, so the
+    // widgets must already exist when the engine first comes up.
     setupPianoWidget();
+
+    // Wire the controller's coordination callbacks. These run at the exact points
+    // the old stopEngine()/startEngine() did, preserving the hook/recorder
+    // ordering invariants (see SynthController.h).
+    SynthController::Host host;
+    host.beforeEngineStop = [this] {
+        // Uninstall the hook FIRST (joins its thread) so no callback runs while we
+        // release the recorder; then drop the recorder before the engine closes.
+        if (hook_) { hook_->uninstall(); hook_.reset(); }
+        rec_ctl_->clearRecorder();
+    };
+    host.afterEngineStart = [this](audio::AudioEngine* engine, AudioBridge* bridge) {
+        if (engine) {
+            rec_ctl_->setRecorder(std::make_unique<Recorder>(
+                Recorder::makeAudioDispatch(engine)));
+            installHook();
+        } else {
+            rec_ctl_->setRecorder(
+                std::make_unique<Recorder>([](const MidiEvent&) {}));
+        }
+        // The new synth starts with no pedals down — clear our state + lamps.
+        static const int cc[3] = {64, 66, 67};
+        for (int i = 0; i < 3; ++i) {
+            pedal_engaged_[i].store(false, std::memory_order_relaxed);
+            if (pedal_widget_) pedal_widget_->setPedalState(cc[i], false);
+        }
+        // Reconnect the bridge → PianoWidget signals: the bridge is a fresh object
+        // each (re)start, so this targets a new sender (no duplication). The
+        // mouse-click path is wired once in setupPianoWidget and is NOT touched
+        // here. On the very first start the widgets already exist (setupPianoWidget
+        // ran above), so the initial connection is made here too.
+        if (piano_widget_ && bridge) {
+            connect(bridge, &AudioBridge::noteActivated,
+                    piano_widget_, &PianoWidget::onNoteActivated);
+            connect(bridge, &AudioBridge::noteReleased,
+                    piano_widget_, &PianoWidget::onNoteReleased);
+        }
+    };
+    host.onInstrumentChanged = [this] { refreshSf2Label(); updateEditorAction(); };
+    host.dialogParent = this;
+    synth_ctl_->attach(std::move(host));
+
+    audio::AudioEngine::Config cfg;  // defaults: 44100 Hz, 256 frames
+    if (!synth_ctl_->initialize(cfg)) {
+        QMessageBox::warning(this, tr("Audio Error"),
+                             tr("Failed to open audio output device.\n"
+                                "SF2 playback will be unavailable."));
+    }
+
     keymap_ctl_->loadStartup();
-    loadDefaultSoundFont();
+    synth_ctl_->loadDefault();
     loadPedalModeSetting();
     loadLanguageSetting();  // re-apply the language chosen in a previous session
 
@@ -117,15 +173,12 @@ MainWindow::~MainWindow() = default;
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     status_timer_->stop();
-    closePluginEditor();  // detach plug-in view while synth_ is still alive
+    synth_ctl_->closePluginEditor();  // detach plug-in view while synth is alive
     if (piano_widget_) piano_widget_->releaseAll();
-    // Uninstall the hook first (joins its thread) so no feed() runs while we
-    // release the recorder; then drop the recorder before engine_ closes, so the
-    // recorder (whose playback dispatch targets engine_) is gone first.
-    if (hook_)   hook_->uninstall();
-    if (audio_bridge_) audio_bridge_->stop();
-    if (rec_ctl_) rec_ctl_->clearRecorder();
-    if (engine_) engine_->close();
+    // shutdown() runs beforeEngineStop (uninstall hook + release recorder, in that
+    // order) then stops the bridge and closes the engine — the same ordered
+    // teardown as before, now owned by the controller.
+    synth_ctl_->shutdown();
     QMainWindow::closeEvent(event);
 }
 
@@ -305,32 +358,6 @@ void MainWindow::setupStatusBar() {
     statusBar()->addPermanentWidget(lbl_latency_);
 }
 
-void MainWindow::setupEngine() {
-    synth_  = createFluidSynth();
-    engine_ = std::make_unique<audio::AudioEngine>();
-
-    audio::AudioEngine::Config cfg;  // defaults: 44100 Hz, 256 frames
-    audio_cfg_ = cfg;
-    if (!engine_->open(cfg, synth_.get())) {
-        QMessageBox::warning(this, tr("Audio Error"),
-                             tr("Failed to open audio output device.\n"
-                                "SF2 playback will be unavailable."));
-        engine_.reset();
-        synth_.reset();
-        rec_ctl_->setRecorder(std::make_unique<Recorder>([](const MidiEvent&) {}));
-        return;
-    }
-
-    rec_ctl_->setRecorder(std::make_unique<Recorder>(
-        Recorder::makeAudioDispatch(engine_.get())));
-
-    installHook();
-
-    audio_bridge_ = std::make_unique<AudioBridge>(engine_.get());
-    // Signals connected to PianoWidget in setupPianoWidget().
-    audio_bridge_->start();
-}
-
 void MainWindow::installHook() {
     hook_ = KeyboardHook::create();
     bool ok = hook_->install(
@@ -405,7 +432,9 @@ void MainWindow::handleKeyboardEvent(const KeyEvent& kev) {
         // held. Tell the user on engage so they don't think the pedal is broken.
         // (current_backend_ is safe to read here: backend switches uninstall the
         // hook first, so it never changes while this callback runs.)
-        if (engage && current_backend_ == Backend::Vst3 && (idx == 0 || idx == 1)) {
+        if (engage &&
+            synth_ctl_->currentBackend() == SynthController::Backend::Vst3 &&
+            (idx == 0 || idx == 1)) {
             QMetaObject::invokeMethod(
                 this, [this] {
                     statusBar()->showMessage(
@@ -425,80 +454,24 @@ void MainWindow::handleKeyboardEvent(const KeyEvent& kev) {
     // appends it; same hook-thread safety invariant as before the extraction.
     rec_ctl_->feed(ev);
 
-    // engine_ is only reassigned by stop/startEngine, which uninstall the hook
-    // first — so it cannot be swapped out from under this callback.
-    if (!engine_) return;
+    // The engine is only reassigned by SynthController's stop/start path, which
+    // uninstalls the hook first — so it cannot be swapped out from under this
+    // callback (the hook thread is joined before engine_ changes).
+    auto* engine = synth_ctl_->engine();
+    if (!engine) return;
     switch (ev.type) {
         case EventType::NoteOn:
-            engine_->postNoteOn(ev.chan, ev.note, ev.vel);
+            engine->postNoteOn(ev.chan, ev.note, ev.vel);
             break;
         case EventType::NoteOff:
-            engine_->postNoteOff(ev.chan, ev.note);
+            engine->postNoteOff(ev.chan, ev.note);
             break;
         case EventType::ControlChange:
-            engine_->postControlChange(ev.chan, ev.note, ev.vel);
+            engine->postControlChange(ev.chan, ev.note, ev.vel);
             break;
         case EventType::AllNotesOff:
-            engine_->postAllNotesOff(ev.chan);
+            engine->postAllNotesOff(ev.chan);
             break;
-    }
-}
-
-void MainWindow::restartEngine(const audio::AudioEngine::Config& cfg) {
-    stopEngine();
-    startEngine(cfg);
-}
-
-void MainWindow::stopEngine() {
-    // Uninstall the hook FIRST: uninstall() joins the hook thread, guaranteeing
-    // no callback is running (or will run) before we destroy the recorder and
-    // engine_ that handleKeyboardEvent() dereferences. Tearing those down while a
-    // callback was mid-flight would be a use-after-free on a backend switch.
-    if (hook_) { hook_->uninstall(); hook_.reset(); }
-    if (audio_bridge_) { audio_bridge_->stop(); audio_bridge_.reset(); }
-    rec_ctl_->clearRecorder();  // stops playback/recording + releases the recorder
-    // engine_->close() blocks until the audio callback has stopped (and shuts
-    // down the *current* synth_), so once this returns the caller may safely
-    // swap or destroy synth_.
-    if (engine_) { engine_->close(); engine_.reset(); }
-}
-
-void MainWindow::startEngine(const audio::AudioEngine::Config& cfg) {
-    engine_ = std::make_unique<audio::AudioEngine>();
-    if (!engine_->open(cfg, synth_.get())) {
-        QMessageBox::critical(this, tr("Audio Error"),
-                              tr("Failed to open audio with the new settings.\n"
-                                 "Audio is stopped — reopen it from Settings."));
-        engine_.reset();
-        rec_ctl_->setRecorder(std::make_unique<Recorder>([](const MidiEvent&) {}));
-        return;
-    }
-
-    audio_cfg_ = cfg;
-    rec_ctl_->setRecorder(std::make_unique<Recorder>(
-        Recorder::makeAudioDispatch(engine_.get())));
-    installHook();
-
-    // The new synth starts with no pedals down — clear our state + lamps to match.
-    for (int i = 0; i < 3; ++i) {
-        pedal_engaged_[i].store(false, std::memory_order_relaxed);
-        static const int cc[3] = {64, 66, 67};
-        if (pedal_widget_) pedal_widget_->setPedalState(cc[i], false);
-    }
-
-    audio_bridge_ = std::make_unique<AudioBridge>(engine_.get());
-    audio_bridge_->start();
-
-    // Reconnect the bridge → PianoWidget signals: the bridge is a fresh object
-    // each restart, so this targets a new sender (no duplication). Mouse-click
-    // playback is wired ONCE in setupPianoWidget and must NOT be reconnected here
-    // — its target (this) is persistent, so reconnecting would stack a duplicate
-    // on every restart and play multiple NoteOns per click.
-    if (piano_widget_ && audio_bridge_) {
-        connect(audio_bridge_.get(), &AudioBridge::noteActivated,
-                piano_widget_,       &PianoWidget::onNoteActivated);
-        connect(audio_bridge_.get(), &AudioBridge::noteReleased,
-                piano_widget_,       &PianoWidget::onNoteReleased);
     }
 }
 
@@ -515,31 +488,28 @@ void MainWindow::setupPianoWidget() {
     col->addWidget(pedal_widget_, /*stretch=*/0);
     setCentralWidget(central);
 
-    if (audio_bridge_) {
-        connect(audio_bridge_.get(), &AudioBridge::noteActivated,
-                piano_widget_,       &PianoWidget::onNoteActivated);
-        connect(audio_bridge_.get(), &AudioBridge::noteReleased,
-                piano_widget_,       &PianoWidget::onNoteReleased);
-    }
+    // The bridge → PianoWidget connection is made by SynthController's
+    // afterEngineStart callback (the bridge is recreated on every engine start).
 
-    // Mouse-click playback is wired exactly once, here — never in startEngine,
-    // which runs on every backend/settings change and would stack duplicate
-    // connections. The lambdas read engine_ live so they follow restarts, and
-    // no-op while the engine is down (e.g. if it failed to open at startup).
-    // They also feed the recorder (like the keyboard path) so on-screen clicks
-    // are captured in a recording, not just the audio output.
+    // Mouse-click playback is wired exactly once, here — never on engine restart,
+    // which would stack duplicate connections. The lambdas read the engine live so
+    // they follow restarts, and no-op while it is down (e.g. if it failed to open
+    // at startup). They also feed the recorder (like the keyboard path) so on-screen
+    // clicks are captured in a recording, not just the audio output.
     connect(piano_widget_, &PianoWidget::mouseNoteOn,
             this, [this](int midi, int vel) {
                 const auto note = static_cast<uint8_t>(midi);
                 const auto v    = softVelocity(vel);  // soft pedal applies to clicks too
                 rec_ctl_->feed(MidiEvent{EventType::NoteOn, 0, note, v, 0});
-                if (engine_) engine_->postNoteOn(0, note, v);
+                if (auto* engine = synth_ctl_->engine())
+                    engine->postNoteOn(0, note, v);
             });
     connect(piano_widget_, &PianoWidget::mouseNoteOff,
             this, [this](int midi) {
                 const auto note = static_cast<uint8_t>(midi);
                 rec_ctl_->feed(MidiEvent{EventType::NoteOff, 0, note, 0, 0});
-                if (engine_) engine_->postNoteOff(0, note);
+                if (auto* engine = synth_ctl_->engine())
+                    engine->postNoteOff(0, note);
             });
 
     connect(piano_widget_, &PianoWidget::keyClickedForRebind,
@@ -553,129 +523,22 @@ void MainWindow::setupPianoWidget() {
     keymap_ctl_->setWidgets(piano_widget_, overlay_, pedal_widget_);
 }
 
-void MainWindow::loadDefaultSoundFont() {
-    // FluidSynth's sfload() needs a real file path. The preferred default sound
-    // is the bundled GeneralUser GS piano — a real sampled piano shipped as a
-    // loose file beside the exe (too large, ~30 MB, for the .qrc). If it is
-    // missing we fall back to the tiny synthetic piano embedded in the .qrc so
-    // the app is always audible out of the box. (Open SF2 / Open VST3 override
-    // either at runtime.)
-    if (!synth_ || current_backend_ != Backend::FluidSynth) return;
-
-    // 1) Preferred: the bundled GeneralUser GS sampled piano next to the exe.
-    const QString bundled = bundledDefaultSf2Path();
-    if (!bundled.isEmpty() &&
-        synth_->loadInstrument(bundled.toStdString())) {
-        current_sf2_name_ = "GeneralUser-GS.sf2";
-        sf2_builtin_ = true;
-        current_sf2_path_.clear();  // a default, not a user pick — keep it out of recents
-        refreshSf2Label();
-        return;
-    }
-
-    // 2) Fallback: extract the embedded synthetic piano to a per-user cache file
-    // and load it. Always re-extract so an old build's stale SF2 never shadows
-    // an updated default sound.
-    const QString dir =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QDir().mkpath(dir);
-    const QString sf2_path = dir + "/default_piano.sf2";
-    {
-        QFile src(":/soundfonts/default_piano.sf2");
-        if (!src.open(QIODevice::ReadOnly)) return;
-        QFile dst(sf2_path);
-        if (!dst.open(QIODevice::WriteOnly)) return;
-        dst.write(src.readAll());
-        dst.close();
-    }
-
-    if (synth_->loadInstrument(sf2_path.toStdString())) {
-        current_sf2_name_ = "default_piano.sf2";
-        sf2_builtin_ = true;
-        refreshSf2Label();
-    }
-}
-
-QString MainWindow::bundledDefaultSf2Path() const {
-    const QString p =
-        QCoreApplication::applicationDirPath() + "/soundfonts/GeneralUser-GS.sf2";
-    return QFileInfo::exists(p) ? p : QString();
-}
-
-// Rebuilds the status-bar instrument label from the current backend + name. Kept
-// in one place so a language switch can refresh the " (built-in)" suffix.
+// Rebuilds the status-bar instrument label from SynthController's state. Kept in
+// MainWindow because it owns the label + the recorder title; called on every
+// instrument change (via the onInstrumentChanged host callback) and on language
+// switch (to refresh the " (built-in)" suffix).
 void MainWindow::refreshSf2Label() {
-    // Keep the recorder's save-file [meta] title in sync with the instrument
-    // (called on every instrument change). Done here so there is one update point.
-    if (rec_ctl_) rec_ctl_->setRecordingTitle(current_sf2_name_);
+    const QString name = synth_ctl_->currentName();
+    // Keep the recorder's save-file [meta] title in sync with the instrument.
+    if (rec_ctl_) rec_ctl_->setRecordingTitle(name);
 
     if (!lbl_sf2_name_) return;
     const QString prefix =
-        (current_backend_ == Backend::Vst3) ? "VST3: " : "SF2: ";
-    QString text = prefix + current_sf2_name_;
-    if (sf2_builtin_) text += tr(" (built-in)");
+        (synth_ctl_->currentBackend() == SynthController::Backend::Vst3) ? "VST3: "
+                                                                         : "SF2: ";
+    QString text = prefix + name;
+    if (synth_ctl_->isBuiltin()) text += tr(" (built-in)");
     lbl_sf2_name_->setText(text);
-}
-
-// ── Transactional backend switching ─────────────────────────────────────────
-
-bool MainWindow::rebuildBackend(Backend target) {
-    closePluginEditor();  // the editor (if any) references the synth we replace
-    stopEngine();         // stop the callback BEFORE swapping synth_
-    if (target == Backend::Vst3) {
-#ifdef KEYPIANO_ENABLE_VST3
-        synth_ = createVst3Synth();
-#else
-        synth_ = nullptr;
-#endif
-    } else {
-        synth_ = createFluidSynth();
-    }
-    current_backend_ = target;
-    startEngine(audio_cfg_);
-    return engine_ != nullptr && synth_ != nullptr;
-}
-
-MainWindow::InstrumentState MainWindow::currentInstrument() const {
-    InstrumentState s;
-    s.backend = current_backend_;
-    s.name    = current_sf2_name_;
-    s.builtin = sf2_builtin_;
-    s.path    = (current_backend_ == Backend::Vst3) ? current_vst3_path_
-                                                    : current_sf2_path_;
-    return s;
-}
-
-void MainWindow::restoreInstrument(const InstrumentState& s) {
-    bool ok = false;
-    if (s.backend == Backend::Vst3 && !s.path.isEmpty()) {
-        ok = rebuildBackend(Backend::Vst3) && synth_ &&
-             synth_->loadInstrument(s.path.toStdString());
-        if (ok) {
-            current_vst3_path_ = s.path;
-            current_sf2_name_  = s.name;
-            current_sf2_path_.clear();
-            sf2_builtin_       = false;
-        }
-    } else if (!s.builtin && !s.path.isEmpty()) {  // FluidSynth + a user SF2
-        ok = rebuildBackend(Backend::FluidSynth) && synth_ &&
-             synth_->loadInstrument(s.path.toStdString());
-        if (ok) {
-            current_sf2_path_  = s.path;
-            current_sf2_name_  = s.name;
-            current_vst3_path_.clear();
-            sf2_builtin_       = false;
-        }
-    }
-    // Built-in default, or any restore that failed above: fall back to the
-    // bundled default piano so the user always has a working instrument.
-    if (!ok) {
-        rebuildBackend(Backend::FluidSynth);
-        current_vst3_path_.clear();
-        loadDefaultSoundFont();  // sets name + builtin flag + label
-    }
-    refreshSf2Label();
-    updateEditorAction();
 }
 
 // ── Slots ─────────────────────────────────────────────────────────────────────
@@ -684,56 +547,17 @@ void MainWindow::onOpenSf2() {
     SoundFontDialog dlg(this);
     // Pin the bundled GeneralUser GS piano so the user can always pick it back,
     // even though it's never stored in the recent list.
-    if (const QString bundled = bundledDefaultSf2Path(); !bundled.isEmpty())
+    if (const QString bundled = synth_ctl_->bundledDefaultSf2Path(); !bundled.isEmpty())
         dlg.setBuiltinDefault(bundled, QStringLiteral("GeneralUser-GS.sf2"));
-    dlg.setInitialPath(current_sf2_path_);  // full path, or empty for built-in
+    dlg.setInitialPath(synth_ctl_->currentSf2Path());  // path, or empty for built-in
     if (dlg.exec() != QDialog::Accepted) return;
 
     const QString path = dlg.selectedPath();
     if (path.isEmpty()) return;
 
-    if (current_backend_ != Backend::FluidSynth) {
-        // Coming from a VST3 plug-in: rebuild on FluidSynth, then load. If the
-        // load fails, roll back to the previous backend rather than strand the
-        // user on an empty FluidSynth.
-        const InstrumentState prev = currentInstrument();
-        if (!(rebuildBackend(Backend::FluidSynth) && synth_ &&
-              synth_->loadInstrument(path.toStdString()))) {
-            QMessageBox::critical(this, tr("Error"),
-                                  tr("Failed to load SoundFont:\n%1").arg(path));
-            restoreInstrument(prev);
-            return;
-        }
-    } else {
-        // Already on FluidSynth: load on the live synth. loadInstrument() loads
-        // the new font before unloading the old, so a failed load leaves the
-        // current instrument playing — no teardown, no audio gap.
-        if (!engine_ || !synth_) {
-            QMessageBox::critical(this, tr("Error"),
-                                  tr("Audio engine is not running."));
-            return;
-        }
-        if (!synth_->loadInstrument(path.toStdString())) {
-            QMessageBox::critical(this, tr("Error"),
-                                  tr("Failed to load SoundFont:\n%1").arg(path));
-            return;
-        }
-    }
-
-    // If the user picked the bundled default, keep our state consistent with
-    // loadDefaultSoundFont(): mark it built-in and keep it out of the recents path.
-    const QString bundled = bundledDefaultSf2Path();
-    const bool is_builtin =
-        !bundled.isEmpty() &&
-        QFileInfo(path).canonicalFilePath() == QFileInfo(bundled).canonicalFilePath();
-
-    current_sf2_name_ = QFileInfo(path).fileName();
-    current_sf2_path_ = is_builtin ? QString() : path;
-    current_vst3_path_.clear();
-    sf2_builtin_ = is_builtin;
-    refreshSf2Label();
-    updateEditorAction();
-    statusBar()->showMessage(tr("Loaded: %1").arg(current_sf2_name_), 3000);
+    QString err;
+    if (!synth_ctl_->loadSf2(path, &err))
+        QMessageBox::critical(this, tr("Error"), err);
 }
 
 void MainWindow::onOpenVst3() {
@@ -746,95 +570,48 @@ void MainWindow::onOpenVst3() {
         this, tr("Select VST3 instrument (.vst3 bundle folder)"), vst3StartDir());
     if (path.isEmpty()) return;
 
-    // Snapshot the current working instrument so a bad bundle can be rolled back.
-    const InstrumentState prev = currentInstrument();
-
-    if (rebuildBackend(Backend::Vst3) && synth_ &&
-        synth_->loadInstrument(path.toStdString())) {
-        // Success — remember the bundle + its parent folder and update the label.
-        current_vst3_path_ = path;
-        current_sf2_name_  = QFileInfo(path).fileName();
-        current_sf2_path_.clear();
-        sf2_builtin_       = false;
+    QString err;
+    if (synth_ctl_->loadVst3(path, &err)) {
+        // Remember the bundle's parent folder so the dialog reopens there.
         QSettings("keypiano", "keypiano")
             .setValue(kVst3DirKey, QFileInfo(path).absolutePath());
-        refreshSf2Label();
-        updateEditorAction();
-        statusBar()->showMessage(tr("Loaded VST3: %1").arg(current_sf2_name_),
-                                 3000);
         return;
     }
-
-    // Load failed — the VST3 backend came up empty (or could not start). Restore
-    // the previous, working backend so the user is never left without sound.
-    QMessageBox::critical(
-        this, tr("Error"),
-        tr("Failed to load VST3 instrument:\n%1\n\n"
-           "Make sure the folder is a valid .vst3 bundle containing an "
-           "instrument plug-in.").arg(path));
-    restoreInstrument(prev);
+    QMessageBox::critical(this, tr("Error"), err);
 #endif
 }
 
 void MainWindow::onShowPluginEditor() {
-    if (editor_window_) {            // already open — bring it forward
-        editor_window_->show();
-        editor_window_->raise();
-        editor_window_->activateWindow();
-        return;
-    }
-
-    auto* editor = dynamic_cast<IPluginEditor*>(synth_.get());
-    if (!editor || !editor->hasEditor()) {
-        QMessageBox::information(this, tr("Plugin Editor"),
-                                 tr("The current backend has no plug-in editor."));
-        return;
-    }
-
-    auto* win = new Vst3EditorWindow(editor, this);
-    if (!win->openEditor()) {
-        delete win;
-        QMessageBox::information(
-            this, tr("Plugin Editor"),
-            tr("This plug-in does not provide a custom editor window."));
-        return;
-    }
-    editor_window_ = win;
-    connect(win, &QObject::destroyed, this,
-            [this] { editor_window_ = nullptr; });
-    win->show();
-}
-
-void MainWindow::closePluginEditor() {
-    if (editor_window_) {
-        // close() runs the window's closeEvent synchronously (detaching the
-        // plug-in view) before WA_DeleteOnClose schedules deletion.
-        editor_window_->close();
-        editor_window_ = nullptr;
-    }
+    synth_ctl_->showPluginEditor(this);
 }
 
 void MainWindow::updateEditorAction() {
     if (!act_show_editor_) return;
-    auto* editor = dynamic_cast<IPluginEditor*>(synth_.get());
-    act_show_editor_->setEnabled(editor && editor->hasEditor());
+    act_show_editor_->setEnabled(synth_ctl_->hasPluginEditor());
 }
 
 void MainWindow::onOpenSettings() {
-    SettingsDialog dlg(audio_cfg_, this);
+    const auto& cur = synth_ctl_->config();
+    SettingsDialog dlg(cur, this);
     if (dlg.exec() != QDialog::Accepted) return;
     auto new_cfg = dlg.config();
-    if (new_cfg.device_name  == audio_cfg_.device_name  &&
-        new_cfg.sample_rate  == audio_cfg_.sample_rate   &&
-        new_cfg.buffer_frames == audio_cfg_.buffer_frames)
+    if (new_cfg.device_name  == cur.device_name  &&
+        new_cfg.sample_rate  == cur.sample_rate   &&
+        new_cfg.buffer_frames == cur.buffer_frames)
         return;
-    restartEngine(new_cfg);
+    synth_ctl_->restart(new_cfg);
+    if (!synth_ctl_->engine()) {
+        QMessageBox::critical(this, tr("Audio Error"),
+                              tr("Failed to open audio with the new settings.\n"
+                                 "Audio is stopped — reopen it from Settings."));
+        return;
+    }
     statusBar()->showMessage(tr("Audio settings applied."), 3000);
 }
 
 void MainWindow::updateStatus() {
-    if (engine_ && engine_->isOpen()) {
-        const auto& s = engine_->stats();
+    if (auto* engine = synth_ctl_->engine(); engine && engine->isOpen()) {
+        const auto& s = engine->stats();
         uint32_t lat = s.latency_us.load(std::memory_order_relaxed);
         double   cpu = s.cpu_load.load(std::memory_order_relaxed);
         lbl_latency_->setText(
@@ -899,8 +676,8 @@ void MainWindow::setPedalMode(PedalMode mode) {
     static const int cc[3] = {64, 66, 67};
     for (int i = 0; i < 3; ++i) {
         if (pedal_engaged_[i].exchange(false, std::memory_order_relaxed)) {
-            if (engine_)
-                engine_->postControlChange(0, static_cast<uint8_t>(cc[i]), 0);
+            if (auto* engine = synth_ctl_->engine())
+                engine->postControlChange(0, static_cast<uint8_t>(cc[i]), 0);
             if (pedal_widget_) pedal_widget_->setPedalState(cc[i], false);
         }
     }

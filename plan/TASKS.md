@@ -559,7 +559,11 @@
       `pushFeedback`（无分配、wait-free）统一三处 feedback push 的计数。MainWindow 状态栏加 `lbl_drops_`（红字，
       **仅 drop>0 时显示**："Drops: N in / M ui"），`updateStatus()` 每 500ms 刷新；I18n 加中文「丢弃：输入 %1 / 界面 %2」。
       计数随 engine 重开归零（新 Stats）。验收：gui-debug `/W4 /WX` 干净 + headless **83/83** + 冒烟启动正常。
-- [ ] **④ VST3 踏板限制提示**（低/中）——真正实现 `IMidiMapping` 成本高，暂不做；至少 UI/状态提示避免用户以为 sustain pedal 坏了。
+- [x] **④ VST3 踏板限制提示（2026-06-16，已完成）**——真正实现 `IMidiMapping` 成本高，暂不做。
+      VST3 后端 `controlChange` 是 no-op，延音/持音踏板灯会亮但无声 → 用户以为坏了。**实现**：`handleKeyboardEvent`
+      踏板块里，当 `engage && current_backend_==Vst3 && (idx==0||1)`（延音/持音）时，marshal 到 UI 线程在状态栏提示
+      4 秒「VST3 乐器不支持延音/持音踏板（弱音踏板仍然有效）」；I18n 加中文。软踏板(idx 2)走 velocity 缩减、不提示。
+      `current_backend_` 在 hook 线程读安全（切后端先卸 hook）。验收：gui-debug `/W4 /WX` 干净 + 冒烟启动正常。
 - [ ] **⑤ 抽 AudioSession/SynthController**（中高/高，第二阶段）——长期正确方向，但用「小步迁移」，
       等 ② 后端切换回滚改完再顺手收 `stopEngine/startEngine/synth_` 重复逻辑，不一次拆穿 MainWindow。
 - [ ] **⑥ 生命周期测试**（中/中高）——补后端切换、失败路径测试，等 ⑤ 抽出后再测更划算。

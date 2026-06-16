@@ -143,6 +143,9 @@ Translator::Translator(QObject* parent) : QTranslator(parent) {
         {"CPU: %1%", QStringLiteral("CPU：%1%")},
         {"Drops: %1 in / %2 ui",
          QStringLiteral("丢弃：输入 %1 / 界面 %2")},
+        {"Sustain/sostenuto pedals aren't supported by VST3 "
+         "instruments (the soft pedal still works).",
+         QStringLiteral("VST3 乐器不支持延音/持音踏板（弱音踏板仍然有效）。")},
 
         // ── SoundFontDialog ─────────────────────────────────────────────────
         {"Open SoundFont", QStringLiteral("打开音色库")},

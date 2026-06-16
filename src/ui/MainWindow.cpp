@@ -389,6 +389,22 @@ void MainWindow::handleKeyboardEvent(const KeyEvent& kev) {
             Qt::QueuedConnection);
         // Note: CC67 (soft) is sent on too, but FluidSynth ignores it — the soft
         // effect is applied below as a velocity reduction on new notes.
+
+        // VST3 instruments get no sustain/sostenuto: controlChange is a no-op on
+        // that backend (no IMidiMapping), so the pedal lamp lights but nothing is
+        // held. Tell the user on engage so they don't think the pedal is broken.
+        // (current_backend_ is safe to read here: backend switches uninstall the
+        // hook first, so it never changes while this callback runs.)
+        if (engage && current_backend_ == Backend::Vst3 && (idx == 0 || idx == 1)) {
+            QMetaObject::invokeMethod(
+                this, [this] {
+                    statusBar()->showMessage(
+                        tr("Sustain/sostenuto pedals aren't supported by VST3 "
+                           "instruments (the soft pedal still works)."),
+                        4000);
+                },
+                Qt::QueuedConnection);
+        }
     }
 
     // Soft pedal (engaged) softens new notes, since the synth does not.

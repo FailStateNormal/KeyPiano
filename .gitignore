@@ -11,6 +11,9 @@ install_manifest.txt
 vcpkg_installed/
 .vcpkg-root
 
+# packaged release artifacts
+dist/
+
 # local verification scratch (gtest clone, downloaded headers, throwaway builds)
 .verify/
 

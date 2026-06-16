@@ -122,6 +122,36 @@ void RecordingController::startPlayback() {
                 0);
 }
 
+void RecordingController::openRecording() {
+    if (!recorder_) return;
+    // loadFromFile must run in Idle state — stop any playback/recording first.
+    if (recorder_->state() != Recorder::State::Idle) {
+        recorder_->stopPlayback();
+        recorder_->stopRecording();
+    }
+
+    const QString path = QFileDialog::getOpenFileName(
+        dialog_parent_, tr("Open Recording"), {},
+        tr("keypiano performance (*.kps);;All files (*)"));
+    if (path.isEmpty()) return;
+
+    KpsMeta meta;
+    std::string err;
+    if (!recorder_->loadFromFile(path.toStdString(), &meta, &err)) {
+        QMessageBox::critical(dialog_parent_, tr("Open Error"),
+                              tr("Failed to open recording:\n%1")
+                                  .arg(QString::fromStdString(err)));
+        return;
+    }
+
+    syncActions();  // Playback is now enabled (the buffer holds the loaded events)
+    const auto n = static_cast<int>(recorder_->eventCount());
+    emit status(tr("Loaded recording: %1 (%2 events)")
+                    .arg(QFileInfo(path).fileName()).arg(n),
+                3000);
+    startPlayback();  // play it immediately — that's what "open a recording" means
+}
+
 void RecordingController::toggleFromHotkey() {
     if (!recorder_) return;
     if (recorder_->state() == Recorder::State::Recording)

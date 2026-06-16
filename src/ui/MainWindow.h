@@ -201,6 +201,7 @@ private:
     QAction* act_rec_start_   = nullptr;
     QAction* act_stop_        = nullptr;
     QAction* act_playback_    = nullptr;
+    QAction* act_open_rec_    = nullptr;
     QAction* act_usage_guide_ = nullptr;
     QAction* act_about_       = nullptr;
     QAction* act_lang_en_     = nullptr;

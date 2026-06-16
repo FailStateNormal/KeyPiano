@@ -64,6 +64,9 @@ public slots:
     void startRecording();
     void stop();
     void startPlayback();
+    // Browse for a saved .kps file, load it into the recorder and play it back.
+    // Lets the user replay any earlier recording, not just the one just captured.
+    void openRecording();
     // Record hotkey: start if Idle, stop if Recording (ignored while Playing).
     void toggleFromHotkey();
 

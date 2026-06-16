@@ -72,6 +72,8 @@ switch between saved layouts.</li>
 <li><b>Record &rarr; Start Recording</b> (Ctrl+R), play, then <b>Stop</b> (Ctrl+.).
 You'll be asked to save a <code>.kps</code> file.</li>
 <li><b>Record &rarr; Playback</b> (Ctrl+P) replays what you just recorded.</li>
+<li><b>Record &rarr; Open Recording...</b> (Ctrl+Shift+P) opens any saved
+<code>.kps</code> file and plays it back.</li>
 </ul>
 
 <h3>6. Settings &amp; language</h3>
@@ -105,6 +107,7 @@ Keys</b>):</p>
 <tr><td><b>Ctrl+R</b></td><td>Start Recording</td></tr>
 <tr><td><b>Ctrl+.</b></td><td>Stop recording / playback</td></tr>
 <tr><td><b>Ctrl+P</b></td><td>Playback</td></tr>
+<tr><td><b>Ctrl+Shift+P</b></td><td>Open Recording...</td></tr>
 </table>
 )");
 }
@@ -167,6 +170,8 @@ QString usageGuideHtmlZh() {
 <li><b>录制 &rarr; 开始录制</b>（Ctrl+R），弹奏后按 <b>停止</b>（Ctrl+.），会提示保存
 <code>.kps</code> 文件。</li>
 <li><b>录制 &rarr; 回放</b>（Ctrl+P）重播刚才录下的内容。</li>
+<li><b>录制 &rarr; 打开录音...</b>（Ctrl+Shift+P）打开任意已保存的
+<code>.kps</code> 文件并回放。</li>
 </ul>
 
 <h3>6. 设置与语言</h3>
@@ -198,6 +203,7 @@ QString usageGuideHtmlZh() {
 <tr><td><b>Ctrl+R</b></td><td>开始录制</td></tr>
 <tr><td><b>Ctrl+.</b></td><td>停止录制 / 回放</td></tr>
 <tr><td><b>Ctrl+P</b></td><td>回放</td></tr>
+<tr><td><b>Ctrl+Shift+P</b></td><td>打开录音...</td></tr>
 </table>
 )");
 }

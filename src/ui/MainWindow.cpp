@@ -233,6 +233,14 @@ void MainWindow::setupMenus() {
             rec_ctl_, &RecordingController::startPlayback);
     rec_menu_->addAction(act_playback_);
 
+    // Open a previously saved .kps recording and play it (independent of whatever
+    // is currently in the buffer). Always available — it loads then plays.
+    act_open_rec_ = new QAction(tr("&Open Recording..."), this);
+    act_open_rec_->setShortcut(QKeySequence("Ctrl+Shift+P"));
+    connect(act_open_rec_, &QAction::triggered,
+            rec_ctl_, &RecordingController::openRecording);
+    rec_menu_->addAction(act_open_rec_);
+
     // The controller owns the enabled-state logic for these three actions.
     rec_ctl_->setActions(act_rec_start_, act_stop_, act_playback_);
 }
@@ -941,6 +949,7 @@ void MainWindow::retranslateUi() {
     if (act_rec_start_) act_rec_start_->setText(tr("&Start Recording"));
     if (act_stop_)      act_stop_->setText(tr("&Stop"));
     if (act_playback_)  act_playback_->setText(tr("&Playback"));
+    if (act_open_rec_)  act_open_rec_->setText(tr("&Open Recording..."));
 
     // Help menu actions.
     if (act_usage_guide_) act_usage_guide_->setText(tr("&Usage Guide..."));

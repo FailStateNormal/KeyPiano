@@ -44,6 +44,9 @@ ui_*.h
 # Screenshots dropped at the repo root (icons live under resources/icons/)
 /*.png
 
+# User recordings (test/scratch .kps files should never be committed)
+*.kps
+
 # OS / editor
 Thumbs.db
 desktop.ini

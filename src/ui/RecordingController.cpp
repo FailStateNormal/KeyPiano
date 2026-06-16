@@ -40,6 +40,9 @@ void RecordingController::feed(const MidiEvent& ev) {
     e.ts_us = std::chrono::duration_cast<std::chrono::microseconds>(
                   std::chrono::steady_clock::now() - record_start_)
                   .count();
+    // Serialise the keyboard-hook and UI (mouse) producers — onMidiEvent appends
+    // to a single reserved slot and is not safe for concurrent writers.
+    std::lock_guard<std::mutex> lock(feed_mutex_);
     recorder_->onMidiEvent(e);
 }
 

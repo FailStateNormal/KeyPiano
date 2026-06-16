@@ -500,17 +500,20 @@ void MainWindow::setupPianoWidget() {
     // which runs on every backend/settings change and would stack duplicate
     // connections. The lambdas read engine_ live so they follow restarts, and
     // no-op while the engine is down (e.g. if it failed to open at startup).
+    // They also feed the recorder (like the keyboard path) so on-screen clicks
+    // are captured in a recording, not just the audio output.
     connect(piano_widget_, &PianoWidget::mouseNoteOn,
             this, [this](int midi, int vel) {
-                if (!engine_) return;
-                engine_->postNoteOn(0,
-                    static_cast<uint8_t>(midi),
-                    softVelocity(vel));  // soft pedal applies to clicks too
+                const auto note = static_cast<uint8_t>(midi);
+                const auto v    = softVelocity(vel);  // soft pedal applies to clicks too
+                rec_ctl_->feed(MidiEvent{EventType::NoteOn, 0, note, v, 0});
+                if (engine_) engine_->postNoteOn(0, note, v);
             });
     connect(piano_widget_, &PianoWidget::mouseNoteOff,
             this, [this](int midi) {
-                if (!engine_) return;
-                engine_->postNoteOff(0, static_cast<uint8_t>(midi));
+                const auto note = static_cast<uint8_t>(midi);
+                rec_ctl_->feed(MidiEvent{EventType::NoteOff, 0, note, 0, 0});
+                if (engine_) engine_->postNoteOff(0, note);
             });
 
     connect(piano_widget_, &PianoWidget::keyClickedForRebind,

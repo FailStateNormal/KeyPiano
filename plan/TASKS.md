@@ -564,6 +564,11 @@
       等 ② 后端切换回滚改完再顺手收 `stopEngine/startEngine/synth_` 重复逻辑，不一次拆穿 MainWindow。
 - [ ] **⑥ 生命周期测试**（中/中高）——补后端切换、失败路径测试，等 ⑤ 抽出后再测更划算。
 - [暂缓] Qt `.ts/.qm` 国际化迁移（手写 I18n 仍能撑）、完整 VST3 CC/踏板实现（涉及参数映射+插件兼容，先提示限制）。
+- [x] **bugfix：鼠标点击的音符现在能被录制（2026-06-16）**——根因：键盘走 `handleKeyboardEvent→feed()`，
+      而 `setupPianoWidget` 的鼠标 lambda 只 `engine_->postNoteOn/Off`、漏喂 recorder。修：鼠标 lambda 也
+      `rec_ctl_->feed(MidiEvent{...})`。**线程安全**：`Recorder::onMidiEvent` 是单生产者，而键盘 feed 在 hook 线程、
+      鼠标 feed 在 UI 线程 → 给 `RecordingController::feed` 加 `feed_mutex_` 串行化两个生产者（均非实时线程，
+      不违反音频铁律）。验收：gui-debug `/W4 /WX` 干净 + headless **83/83** + 冒烟启动正常。
 
 ---
 

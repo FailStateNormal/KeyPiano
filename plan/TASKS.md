@@ -553,7 +553,12 @@
         - **core 局部改 1 处**：`FluidSynthEngine::loadInstrument` 改为**先 sfload 新 font 成功再 sfunload 旧 font**
           （原来先卸后载，失败即静默）——同后端换音色失败时旧音色保留，无音频间断。
       验收：gui-debug `/W4 /WX` 干净 + headless **83/83** + 冒烟启动正常。**切后端失败回滚人工实测待用户跑。**
-- [ ] **③ 队列丢事件统计**（低/中高）——`event_queue_.push()` 失败现在静默丢。加 atomic 计数 + 状态栏/debug 展示。
+- [x] **③ 队列丢事件统计（2026-06-16，已完成）**——`event_queue_.push()` / `feedback_queue->push()` 失败原本静默丢。
+      **实现**：`Stats` 加 `event_drops`（输入事件丢弃 = 漏音/迟音，producer 线程写）+ `feedback_drops`（UI 高亮丢弃 = 纯视觉，
+      audio 线程写），均 relaxed atomic。`AudioEngine::post` push 失败 `fetch_add`；AudioCallback 用本地 lambda
+      `pushFeedback`（无分配、wait-free）统一三处 feedback push 的计数。MainWindow 状态栏加 `lbl_drops_`（红字，
+      **仅 drop>0 时显示**："Drops: N in / M ui"），`updateStatus()` 每 500ms 刷新；I18n 加中文「丢弃：输入 %1 / 界面 %2」。
+      计数随 engine 重开归零（新 Stats）。验收：gui-debug `/W4 /WX` 干净 + headless **83/83** + 冒烟启动正常。
 - [ ] **④ VST3 踏板限制提示**（低/中）——真正实现 `IMidiMapping` 成本高，暂不做；至少 UI/状态提示避免用户以为 sustain pedal 坏了。
 - [ ] **⑤ 抽 AudioSession/SynthController**（中高/高，第二阶段）——长期正确方向，但用「小步迁移」，
       等 ② 后端切换回滚改完再顺手收 `stopEngine/startEngine/synth_` 重复逻辑，不一次拆穿 MainWindow。

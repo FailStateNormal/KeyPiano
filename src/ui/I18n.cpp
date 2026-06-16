@@ -141,6 +141,8 @@ Translator::Translator(QObject* parent) : QTranslator(parent) {
          QStringLiteral("正在回放 %1 个事件……")},
         {"Latency: %1 ms", QStringLiteral("延迟：%1 毫秒")},
         {"CPU: %1%", QStringLiteral("CPU：%1%")},
+        {"Drops: %1 in / %2 ui",
+         QStringLiteral("丢弃：输入 %1 / 界面 %2")},
 
         // ── SoundFontDialog ─────────────────────────────────────────────────
         {"Open SoundFont", QStringLiteral("打开音色库")},

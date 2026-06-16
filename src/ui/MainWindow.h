@@ -210,6 +210,9 @@ private:
     QLabel* lbl_latency_  = nullptr;
     QLabel* lbl_cpu_      = nullptr;
     QLabel* lbl_sf2_name_ = nullptr;
+    // Dropped-event indicator: hidden unless the engine has dropped input or
+    // feedback events (queue full), in which case it shows the counts in red.
+    QLabel* lbl_drops_    = nullptr;
 
     QTimer*  status_timer_     = nullptr;
     QString  current_sf2_name_ = "(none)";

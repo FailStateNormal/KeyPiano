@@ -284,8 +284,12 @@ void MainWindow::setupStatusBar() {
     lbl_sf2_name_ = new QLabel("SF2: (none)", this);
     lbl_cpu_      = new QLabel("CPU: --", this);
     lbl_latency_  = new QLabel("Latency: --", this);
+    lbl_drops_    = new QLabel(this);
+    lbl_drops_->setStyleSheet("color: red;");
+    lbl_drops_->setVisible(false);  // shown only when events are actually dropped
 
     statusBar()->addWidget(lbl_sf2_name_);
+    statusBar()->addPermanentWidget(lbl_drops_);
     statusBar()->addPermanentWidget(lbl_cpu_);
     statusBar()->addPermanentWidget(new QLabel("|", this));
     statusBar()->addPermanentWidget(lbl_latency_);
@@ -792,6 +796,19 @@ void MainWindow::updateStatus() {
             tr("Latency: %1 ms").arg(lat / 1000.0, 0, 'f', 1));
         lbl_cpu_->setText(
             tr("CPU: %1%").arg(cpu * 100.0, 0, 'f', 1));
+
+        // Surface dropped events only when they happen — a non-zero count means
+        // the audio thread is overrunning (lost input notes) or the UI is behind
+        // (missed key highlights). Stays hidden during normal operation.
+        const uint32_t in_drops = s.event_drops.load(std::memory_order_relaxed);
+        const uint32_t ui_drops = s.feedback_drops.load(std::memory_order_relaxed);
+        if (in_drops || ui_drops) {
+            lbl_drops_->setText(
+                tr("Drops: %1 in / %2 ui").arg(in_drops).arg(ui_drops));
+            lbl_drops_->setVisible(true);
+        } else {
+            lbl_drops_->setVisible(false);
+        }
     }
     rec_ctl_->syncActions();
 }

@@ -106,8 +106,10 @@ void AudioEngine::post(EventType type, uint8_t ch, uint8_t a, uint8_t b) {
                    .count(),
   };
   // Best-effort: a full queue means we are overrunning the audio thread badly;
-  // dropping is correct — we must never block the producer.
-  event_queue_.push(ev);
+  // dropping is correct — we must never block the producer. Count the drop so the
+  // UI can surface it (a full event queue means lost/late notes).
+  if (!event_queue_.push(ev))
+    stats_.event_drops.fetch_add(1, std::memory_order_relaxed);
 }
 
 void AudioEngine::postNoteOn(uint8_t ch, uint8_t note, uint8_t vel) {

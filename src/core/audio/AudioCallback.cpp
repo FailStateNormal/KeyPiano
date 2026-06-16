@@ -27,18 +27,24 @@ int audioCallback(void* outputBuffer, void* /*inputBuffer*/,
 
   // Drain every pending control event into the synth. The queue is bounded
   // (1024), so this loop is finite and wait-free; pop() never spins.
+  // Forward note activity to the UI (highlight). Best-effort: if the UI is behind
+  // and the feedback queue is full, dropping is fine — just count it so the UI can
+  // surface that highlights are lagging. Inlined lambda: no allocation, wait-free.
+  auto pushFeedback = [ctx](const MidiEvent& e) {
+    if (!ctx->feedback_queue->push(e))
+      ctx->stats->feedback_drops.fetch_add(1, std::memory_order_relaxed);
+  };
+
   MidiEvent ev;
   while (ctx->event_queue->pop(ev)) {
     switch (ev.type) {
       case EventType::NoteOn:
         ctx->synth->noteOn(ev.chan, ev.note, ev.vel);
-        // Forward note activity to the UI (highlight). Best-effort: if the UI
-        // is behind and the feedback queue is full, dropping is fine.
-        ctx->feedback_queue->push(ev);
+        pushFeedback(ev);
         break;
       case EventType::NoteOff:
         ctx->synth->noteOff(ev.chan, ev.note);
-        ctx->feedback_queue->push(ev);
+        pushFeedback(ev);
         break;
       case EventType::ControlChange:
         // note/vel carry the CC number/value (see AudioEngine::post).
@@ -46,7 +52,7 @@ int audioCallback(void* outputBuffer, void* /*inputBuffer*/,
         break;
       case EventType::AllNotesOff:
         ctx->synth->allNotesOff();
-        ctx->feedback_queue->push(ev);  // let the UI clear all highlights
+        pushFeedback(ev);  // let the UI clear all highlights
         break;
     }
   }

@@ -46,11 +46,20 @@ inline constexpr std::size_t kFeedbackQueueCapacity = 256;
 using EventQueue = MpscQueue<MidiEvent, kEventQueueCapacity>;
 using FeedbackQueue = SpscQueue<MidiEvent, kFeedbackQueueCapacity>;
 
-// Runtime metrics, all read by the UI thread and written by the audio thread.
+// Runtime metrics, read by the UI thread. buffer_underruns / cpu_load /
+// latency_us are written by the audio thread; event_drops is written by the
+// producer threads (hook/UI) and feedback_drops by the audio thread. All updates
+// are relaxed atomics — the values are diagnostics, not synchronisation.
 struct Stats {
   std::atomic<uint32_t> buffer_underruns{0};  // cumulative WASAPI underruns
   std::atomic<double>   cpu_load{0.0};         // last callback time / budget
   std::atomic<uint32_t> latency_us{0};         // one-buffer latency estimate
+  // Input MIDI events dropped because the event queue was full (the audio thread
+  // is overrunning badly) — these are lost/late notes. Cumulative since open().
+  std::atomic<uint32_t> event_drops{0};
+  // UI note-activity events dropped because the feedback queue was full (the UI
+  // is behind) — cosmetic only (a key highlight may be missed). Cumulative.
+  std::atomic<uint32_t> feedback_drops{0};
 };
 
 // Everything the audio thread needs, gathered behind one stable pointer so the

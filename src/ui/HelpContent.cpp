@@ -49,9 +49,10 @@ or <b>Vital</b>, <b>Dexed</b>, etc. Run its installer.</li>
 pick, for example, a piano. (Surge: open the patch browser at the top and pick a
 "Keys"/piano patch.)</li>
 </ol>
-<p><b>Note:</b> the pedals (sustain/sostenuto/soft) and other MIDI CC currently
-work only with the built-in SF2 engine. With a VST3 plug-in they are not yet
-sent — use the SF2 engine if you need pedals.</p>
+<p><b>Note:</b> with a VST3 plug-in, standard MIDI CC are not yet sent, so the
+sustain and sostenuto pedals have no effect — use the SF2 engine if you need
+them. The soft pedal still works on VST3, since it is applied as a key-velocity
+reduction rather than a CC.</p>
 <p>To go back to the built-in sound, just use <b>Open SF2...</b> again.</p>
 
 <h3>4. Remapping keys</h3>
@@ -121,8 +122,9 @@ QString usageGuideHtmlZh() {
 自带的界面——用它的音色/预设浏览器选择，例如钢琴。（以 Surge 为例：点顶部的音色浏览器，
 选一个 “Keys”/钢琴类预设。）</li>
 </ol>
-<p><b>注意：</b>踏板（延音/持音/弱音）等 MIDI CC 目前仅在内置 SF2 引擎下生效；
-加载 VST3 插件时尚未下发这些控制——需要踏板请使用 SF2 引擎。</p>
+<p><b>注意：</b>加载 VST3 插件时尚未下发标准 MIDI CC，因此延音、持音踏板不起作用——
+需要它们请使用 SF2 引擎。弱音踏板在 VST3 下仍然有效，因为它是通过降低按键力度实现的，
+而非依赖 CC。</p>
 <p>想切回内置音色，再次使用 <b>打开 SF2...</b> 即可。</p>
 
 <h3>4. 重映射按键</h3>

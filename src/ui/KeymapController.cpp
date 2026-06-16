@@ -271,8 +271,13 @@ bool KeymapController::tryCaptureRebind(uint32_t vk_code) {
 
 bool KeymapController::tryCaptureClear(uint32_t vk_code) {
     if (!clear_mode_.load(std::memory_order_acquire)) return false;
-    // Swallow the key (no note plays) and remove its binding on the UI thread.
-    // The mode stays on so several keys can be cleared in a row.
+    // Only swallow keys that are actually bound: check the immutable snapshot on
+    // this (hook) thread and let unbound keys pass through silently — they don't
+    // sound anyway, and swallowing them would spam the status bar with "not
+    // bound". The mode stays on so several bound keys can be cleared in a row.
+    auto snap = keymap_ptr_.load(std::memory_order_acquire);
+    if (!snap || !snap->find(vk_code)) return false;
+    // Remove the binding on the UI thread (keymap_ must only be mutated there).
     QMetaObject::invokeMethod(
         this, [this, vk_code] { applyClear(vk_code); }, Qt::QueuedConnection);
     return true;
@@ -313,6 +318,11 @@ void KeymapController::applyRebind(uint32_t vk_code) {
         kb.vk_code = vk_code;
         kb.action  = act;
         kb.channel = 0;
+        // Short, language-independent label so the binding round-trips through
+        // user.map and is ready if the overlay ever renders pedals (today the
+        // overlay shows Note bindings only — see KeyboardOverlayWidget — so this
+        // is not yet visible there; the pedal lamp strip shows the key name).
+        kb.label   = cc == 64 ? "Sus" : cc == 66 ? "Sost" : "Soft";
         keymap_.addBinding(kb);  // overwrites whatever this key did before
 
         publishKeymap();

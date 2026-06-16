@@ -44,8 +44,8 @@ Translator::Translator(QObject* parent) : QTranslator(parent) {
          "Keyboard input will be unavailable.",
          QStringLiteral("无法安装键盘钩子。\n将无法使用键盘输入。")},
         {"Failed to open audio with the new settings.\n"
-         "Reverting to defaults.",
-         QStringLiteral("无法以新设置打开音频。\n已恢复为默认设置。")},
+         "Audio is stopped — reopen it from Settings.",
+         QStringLiteral("无法以新设置打开音频。\n音频已停止，请在“设置”中重新打开。")},
         {"Default Keymap", QStringLiteral("默认键位映射")},
         {"Bundled default keymap has issues:\n%1",
          QStringLiteral("内置默认键位映射存在问题：\n%1")},

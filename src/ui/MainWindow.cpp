@@ -440,7 +440,7 @@ void MainWindow::startEngine(const audio::AudioEngine::Config& cfg) {
     if (!engine_->open(cfg, synth_.get())) {
         QMessageBox::critical(this, tr("Audio Error"),
                               tr("Failed to open audio with the new settings.\n"
-                                 "Reverting to defaults."));
+                                 "Audio is stopped — reopen it from Settings."));
         engine_.reset();
         recorder_ = std::make_unique<Recorder>([](const MidiEvent&) {});
         return;
@@ -461,22 +461,16 @@ void MainWindow::startEngine(const audio::AudioEngine::Config& cfg) {
     audio_bridge_ = std::make_unique<AudioBridge>(engine_.get());
     audio_bridge_->start();
 
-    // Reconnect PianoWidget signals to the new bridge.
+    // Reconnect the bridge → PianoWidget signals: the bridge is a fresh object
+    // each restart, so this targets a new sender (no duplication). Mouse-click
+    // playback is wired ONCE in setupPianoWidget and must NOT be reconnected here
+    // — its target (this) is persistent, so reconnecting would stack a duplicate
+    // on every restart and play multiple NoteOns per click.
     if (piano_widget_ && audio_bridge_) {
         connect(audio_bridge_.get(), &AudioBridge::noteActivated,
                 piano_widget_,       &PianoWidget::onNoteActivated);
         connect(audio_bridge_.get(), &AudioBridge::noteReleased,
                 piano_widget_,       &PianoWidget::onNoteReleased);
-        connect(piano_widget_, &PianoWidget::mouseNoteOn,
-                this, [this](int midi, int vel) {
-                    engine_->postNoteOn(0,
-                        static_cast<uint8_t>(midi),
-                        softVelocity(vel));  // soft pedal applies to clicks too
-                });
-        connect(piano_widget_, &PianoWidget::mouseNoteOff,
-                this, [this](int midi) {
-                    engine_->postNoteOff(0, static_cast<uint8_t>(midi));
-                });
     }
 }
 
@@ -500,18 +494,22 @@ void MainWindow::setupPianoWidget() {
                 piano_widget_,       &PianoWidget::onNoteReleased);
     }
 
-    if (engine_) {
-        connect(piano_widget_, &PianoWidget::mouseNoteOn,
-                this, [this](int midi, int vel) {
-                    engine_->postNoteOn(0,
-                        static_cast<uint8_t>(midi),
-                        softVelocity(vel));  // soft pedal applies to clicks too
-                });
-        connect(piano_widget_, &PianoWidget::mouseNoteOff,
-                this, [this](int midi) {
-                    engine_->postNoteOff(0, static_cast<uint8_t>(midi));
-                });
-    }
+    // Mouse-click playback is wired exactly once, here — never in startEngine,
+    // which runs on every backend/settings change and would stack duplicate
+    // connections. The lambdas read engine_ live so they follow restarts, and
+    // no-op while the engine is down (e.g. if it failed to open at startup).
+    connect(piano_widget_, &PianoWidget::mouseNoteOn,
+            this, [this](int midi, int vel) {
+                if (!engine_) return;
+                engine_->postNoteOn(0,
+                    static_cast<uint8_t>(midi),
+                    softVelocity(vel));  // soft pedal applies to clicks too
+            });
+    connect(piano_widget_, &PianoWidget::mouseNoteOff,
+            this, [this](int midi) {
+                if (!engine_) return;
+                engine_->postNoteOff(0, static_cast<uint8_t>(midi));
+            });
 
     connect(piano_widget_, &PianoWidget::keyClickedForRebind,
             keymap_ctl_, &KeymapController::onRebindKeyClicked);

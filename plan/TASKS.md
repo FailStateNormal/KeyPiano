@@ -464,6 +464,32 @@
       牵涉音频/VST 生命周期或属过早抽象，留后续增量。`record_start_` 已有 seq_cst happens-before，非 bug，未动。
 - [x] 验收：windows-gui-debug `/W4 /WX` 干净 + 冒烟启动不崩；headless 82/82。
 
+### P7-3 增量修复（2026-06-16，用户分层 review）✅
+> 背景：P6 的踏板系列功能（指示灯/重绑/模式/弱音）在 P7-3 抽出 KeymapController 之后才陆续加入，
+> 直接堆回 MainWindow（715→813 行）。用户做了一次分层 review，列出 5 个真问题 + 结构走向。
+> 本轮只修这 5 个（低风险、可独立验证），结构整理另作决策（见末条）。
+- [x] **#1 鼠标信号重复连接（真 bug）**：`mouseNoteOn/Off` 在启动 `setupPianoWidget` 连一次，
+      之后**每次 `startEngine()` 又连一次** → 切 SF2/VST3/改设置后，鼠标点屏幕琴键发多次 NoteOn（叠加放大）。
+      修：鼠标 connect 收口到 `setupPianoWidget` **只连一次**（去掉 `if(engine_)` 守卫、改 lambda 内 `if(!engine_)return;`，
+      兼顾启动时引擎打开失败、后续重启成功的情况）；`startEngine` 删除鼠标 connect，只保留 bridge→piano 重连
+      （bridge 每次新建，连的是新对象，无重复）。
+- [x] **#2 失败提示与行为不符**：`startEngine` open 失败提示 "Reverting to defaults"，实际只 `engine_.reset()`+空
+      recorder，并未用默认配置重开。**不做真 fallback**（默认配置可能同样失败→递归弹窗），改文案为
+      "Audio is stopped — reopen it from Settings."（中文映射同步 I18n.cpp）。
+- [x] **#5 VST3 踏板文案不精确**：`softVelocity` 在 `postNoteOn` 前套用、**不分后端**，所以**弱音在 VST3 下仍生效**；
+      只有 sustain/sostenuto 走 CC 而 VST3 后端 `controlChange` no-op。Help（中英）改为：VST3 下延音/持音无效、
+      弱音（力度衰减实现）仍有效。
+- [x] **#3 clear 模式吞所有 keydown（UX）**：`tryCaptureClear` 原本 clear 开着就吞任意键再提示 "not bound"。
+      改：hook 线程先读不可变快照 `snapshot()->find(vk)`，**未绑定键静默放行**（本就不发声），不再刷状态栏。
+- [x] **#4 踏板重绑无 label（这轮只设 label）**：重绑 pedal binding 设 `Sus/Sost/Soft`（ASCII，可序列化进 user.map）。
+      ⚠️ **用户原诊断有偏差**：`KeyboardOverlayWidget` 只渲染 `KeyAction::Note` 绑定，**任何踏板（默认/重绑）本就不进 overlay**，
+      设 label 不会让它在 overlay 显示；踏板键名实际在踏板灯条显示，默认与重绑一致。"让 overlay 渲染踏板" 是独立后续项，本轮未做。
+- [结构决策] **PedalController 抽取——评估后搁置**：踏板那 ~90 行深度耦合实时 hook 事件流（`process()` 要在 NoteOn 管线中途改
+      `ev`），抽出会在热路径加间接、风险不抵收益；813 行未到警戒线。**下一个结构整理目标定为 `RecordingController`**
+      （recorder 生命周期 + record/stop/playback + `toggleRecordFromHotkey`，边界清晰、不碰实时 atomic）；`SynthController`
+      牵 engine 生命周期 + VST editor，最后动。
+- [x] 验收：windows-gui-debug `/W4 /WX` 干净 + headless **82/82** + 冒烟启动 4s 存活正常关闭。**人工 GUI 实测待用户跑。**
+
 ---
 
 ## 跨阶段注意事项

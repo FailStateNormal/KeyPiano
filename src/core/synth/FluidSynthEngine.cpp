@@ -60,14 +60,16 @@ void FluidSynthEngine::shutdown() {
 bool FluidSynthEngine::loadInstrument(const std::string& path) {
   if (!synth_) return false;
 
-  if (sfont_id_ != FLUID_FAILED) {
-    fluid_synth_sfunload(synth_, static_cast<unsigned int>(sfont_id_), /*reset_presets=*/1);
-    sfont_id_ = FLUID_FAILED;
-  }
-
+  // Load the NEW SoundFont first; only unload the previous one once that
+  // succeeds. If the new file is bad, sfload fails and the currently-loaded
+  // instrument keeps playing — a failed "Open SoundFont" never leaves the user
+  // silent. (FluidSynth happily holds multiple fonts; we just keep the newest.)
   int id = fluid_synth_sfload(synth_, path.c_str(), /*reset_presets=*/1);
   if (id == FLUID_FAILED) return false;
 
+  if (sfont_id_ != FLUID_FAILED) {
+    fluid_synth_sfunload(synth_, static_cast<unsigned int>(sfont_id_), /*reset_presets=*/1);
+  }
   sfont_id_ = id;
   return true;
 }

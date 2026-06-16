@@ -579,6 +579,67 @@ void MainWindow::refreshSf2Label() {
     lbl_sf2_name_->setText(text);
 }
 
+// ── Transactional backend switching ─────────────────────────────────────────
+
+bool MainWindow::rebuildBackend(Backend target) {
+    closePluginEditor();  // the editor (if any) references the synth we replace
+    stopEngine();         // stop the callback BEFORE swapping synth_
+    if (target == Backend::Vst3) {
+#ifdef KEYPIANO_ENABLE_VST3
+        synth_ = createVst3Synth();
+#else
+        synth_ = nullptr;
+#endif
+    } else {
+        synth_ = createFluidSynth();
+    }
+    current_backend_ = target;
+    startEngine(audio_cfg_);
+    return engine_ != nullptr && synth_ != nullptr;
+}
+
+MainWindow::InstrumentState MainWindow::currentInstrument() const {
+    InstrumentState s;
+    s.backend = current_backend_;
+    s.name    = current_sf2_name_;
+    s.builtin = sf2_builtin_;
+    s.path    = (current_backend_ == Backend::Vst3) ? current_vst3_path_
+                                                    : current_sf2_path_;
+    return s;
+}
+
+void MainWindow::restoreInstrument(const InstrumentState& s) {
+    bool ok = false;
+    if (s.backend == Backend::Vst3 && !s.path.isEmpty()) {
+        ok = rebuildBackend(Backend::Vst3) && synth_ &&
+             synth_->loadInstrument(s.path.toStdString());
+        if (ok) {
+            current_vst3_path_ = s.path;
+            current_sf2_name_  = s.name;
+            current_sf2_path_.clear();
+            sf2_builtin_       = false;
+        }
+    } else if (!s.builtin && !s.path.isEmpty()) {  // FluidSynth + a user SF2
+        ok = rebuildBackend(Backend::FluidSynth) && synth_ &&
+             synth_->loadInstrument(s.path.toStdString());
+        if (ok) {
+            current_sf2_path_  = s.path;
+            current_sf2_name_  = s.name;
+            current_vst3_path_.clear();
+            sf2_builtin_       = false;
+        }
+    }
+    // Built-in default, or any restore that failed above: fall back to the
+    // bundled default piano so the user always has a working instrument.
+    if (!ok) {
+        rebuildBackend(Backend::FluidSynth);
+        current_vst3_path_.clear();
+        loadDefaultSoundFont();  // sets name + builtin flag + label
+    }
+    refreshSf2Label();
+    updateEditorAction();
+}
+
 // ── Slots ─────────────────────────────────────────────────────────────────────
 
 void MainWindow::onOpenSf2() {
@@ -589,30 +650,40 @@ void MainWindow::onOpenSf2() {
     const QString path = dlg.selectedPath();
     if (path.isEmpty()) return;
 
-    // Switch back to the FluidSynth backend if a VST3 plug-in was active.
     if (current_backend_ != Backend::FluidSynth) {
-        closePluginEditor();   // detach before the VST3 synth_ is destroyed
-        stopEngine();          // stop the audio callback BEFORE swapping synth_
-        synth_ = createFluidSynth();
-        current_backend_ = Backend::FluidSynth;
-        startEngine(audio_cfg_);
-        updateEditorAction();
-    }
-    if (!engine_ || !synth_) {
-        QMessageBox::critical(this, tr("Error"),
-                              tr("Audio engine is not running."));
-        return;
+        // Coming from a VST3 plug-in: rebuild on FluidSynth, then load. If the
+        // load fails, roll back to the previous backend rather than strand the
+        // user on an empty FluidSynth.
+        const InstrumentState prev = currentInstrument();
+        if (!(rebuildBackend(Backend::FluidSynth) && synth_ &&
+              synth_->loadInstrument(path.toStdString()))) {
+            QMessageBox::critical(this, tr("Error"),
+                                  tr("Failed to load SoundFont:\n%1").arg(path));
+            restoreInstrument(prev);
+            return;
+        }
+    } else {
+        // Already on FluidSynth: load on the live synth. loadInstrument() loads
+        // the new font before unloading the old, so a failed load leaves the
+        // current instrument playing — no teardown, no audio gap.
+        if (!engine_ || !synth_) {
+            QMessageBox::critical(this, tr("Error"),
+                                  tr("Audio engine is not running."));
+            return;
+        }
+        if (!synth_->loadInstrument(path.toStdString())) {
+            QMessageBox::critical(this, tr("Error"),
+                                  tr("Failed to load SoundFont:\n%1").arg(path));
+            return;
+        }
     }
 
-    if (!synth_->loadInstrument(path.toStdString())) {
-        QMessageBox::critical(this, tr("Error"),
-                              tr("Failed to load SoundFont:\n%1").arg(path));
-        return;
-    }
     current_sf2_name_ = QFileInfo(path).fileName();
     current_sf2_path_ = path;
+    current_vst3_path_.clear();
     sf2_builtin_ = false;
     refreshSf2Label();
+    updateEditorAction();
     statusBar()->showMessage(tr("Loaded: %1").arg(current_sf2_name_), 3000);
 }
 
@@ -626,38 +697,33 @@ void MainWindow::onOpenVst3() {
         this, tr("Select VST3 instrument (.vst3 bundle folder)"), vst3StartDir());
     if (path.isEmpty()) return;
 
-    // Detach any open editor before the current synth_ is destroyed.
-    closePluginEditor();
+    // Snapshot the current working instrument so a bad bundle can be rolled back.
+    const InstrumentState prev = currentInstrument();
 
-    // Stop the audio callback BEFORE swapping synth_ (else the callback would
-    // dereference the freed old backend), then bring the engine back up.
-    stopEngine();
-    synth_ = createVst3Synth();
-    current_backend_ = Backend::Vst3;
-    startEngine(audio_cfg_);
-    if (!engine_ || !synth_) {
-        QMessageBox::critical(this, tr("Error"),
-                              tr("Failed to start audio with the VST3 backend."));
+    if (rebuildBackend(Backend::Vst3) && synth_ &&
+        synth_->loadInstrument(path.toStdString())) {
+        // Success — remember the bundle + its parent folder and update the label.
+        current_vst3_path_ = path;
+        current_sf2_name_  = QFileInfo(path).fileName();
+        current_sf2_path_.clear();
+        sf2_builtin_       = false;
+        QSettings("keypiano", "keypiano")
+            .setValue(kVst3DirKey, QFileInfo(path).absolutePath());
+        refreshSf2Label();
+        updateEditorAction();
+        statusBar()->showMessage(tr("Loaded VST3: %1").arg(current_sf2_name_),
+                                 3000);
         return;
     }
 
-    if (!synth_->loadInstrument(path.toStdString())) {
-        QMessageBox::critical(
-            this, tr("Error"),
-            tr("Failed to load VST3 instrument:\n%1\n\n"
-               "Make sure the folder is a valid .vst3 bundle containing an "
-               "instrument plug-in.").arg(path));
-        return;
-    }
-    // Remember the parent folder so next time the dialog opens right here.
-    QSettings("keypiano", "keypiano")
-        .setValue(kVst3DirKey, QFileInfo(path).absolutePath());
-
-    current_sf2_name_ = QFileInfo(path).fileName();
-    sf2_builtin_ = false;
-    refreshSf2Label();
-    statusBar()->showMessage(tr("Loaded VST3: %1").arg(current_sf2_name_), 3000);
-    updateEditorAction();
+    // Load failed — the VST3 backend came up empty (or could not start). Restore
+    // the previous, working backend so the user is never left without sound.
+    QMessageBox::critical(
+        this, tr("Error"),
+        tr("Failed to load VST3 instrument:\n%1\n\n"
+           "Make sure the folder is a valid .vst3 bundle containing an "
+           "instrument plug-in.").arg(path));
+    restoreInstrument(prev);
 #endif
 }
 

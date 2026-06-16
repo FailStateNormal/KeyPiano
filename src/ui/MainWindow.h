@@ -155,6 +155,27 @@ private:
     enum class Backend { FluidSynth, Vst3 };
     Backend current_backend_ = Backend::FluidSynth;
 
+    // ── Transactional backend switching ──────────────────────────────────────
+    // Tears down the running engine and brings it back up on a freshly-built
+    // `target` backend (no instrument loaded yet). Returns true if the engine
+    // came back up. Building the new backend BEFORE proving the instrument loads
+    // is not possible (AudioEngine::open() re-init()s the synth, which would wipe
+    // a pre-loaded FluidSynth font), so the Open SF2 / Open VST3 flows instead
+    // attempt the switch and, on a load failure, call restoreInstrument() to put
+    // the previous working backend back — the user is never left without sound.
+    bool rebuildBackend(Backend target);
+
+    // A snapshot of the active instrument, enough to rebuild it if a backend
+    // switch fails. `path` is the SF2 file / VST3 bundle (empty => built-in).
+    struct InstrumentState {
+        Backend backend = Backend::FluidSynth;
+        QString path;
+        QString name;
+        bool    builtin = false;
+    };
+    InstrumentState currentInstrument() const;         // capture the live state
+    void restoreInstrument(const InstrumentState& s);  // rebuild + reload + relabel
+
     QMenu*   file_menu_       = nullptr;
     QMenu*   rec_menu_        = nullptr;
     QMenu*   help_menu_       = nullptr;
@@ -197,6 +218,9 @@ private:
     // pre-select the right entry when reopening the dialog — must be a real path,
     // not the display name, or it pollutes the recent list with an invalid entry.
     QString  current_sf2_path_;
+    // Full path of the active VST3 bundle (empty unless a VST3 backend is live).
+    // Kept so a failed backend switch can roll back to the previous VST3 plug-in.
+    QString  current_vst3_path_;
 };
 
 } // namespace keypiano::ui

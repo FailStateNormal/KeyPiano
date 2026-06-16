@@ -540,8 +540,19 @@
       新增测试 `KpsFormatUnicode.ChinesePathRoundTrip`（文件名用显式 UTF-8 字节，不依赖源码编码）。
       验收：gui-debug `/W4 /WX` 干净 + headless **83/83**（+1 新测试）+ 冒烟启动正常。
       [遗留] `src/main.cpp:34` 的 `std::ifstream` 是 headless 测试入口、非用户路径，未改。
-- [ ] **② VST3/SF2 加载失败回滚**（中低/高）——VST3 加载失败会把原本能用的 SF2 后端丢掉。先不抽大架构，
-      做局部「候选 synth 成功后再替换」的事务式流程。
+- [x] **② VST3/SF2 加载失败回滚（2026-06-16，已完成）**——VST3 加载失败会把原本能用的 SF2 后端丢掉。
+      **设计约束**：原计划「候选 synth 成功后再替换」需先离线加载候选再让 engine open，但 `AudioEngine::open()`
+      必调 `synth->init()`，而 `FluidSynthEngine::init()` 会新建 synth（assert !synth_）冲掉已加载的 font →
+      纯预加载需改 core 接口（让 open 跳过已就绪 synth），不算「局部」。故改用**等价的用户级保证**：尝试切换，
+      失败即回滚重建原后端，用户永不失去能用的后端，且代价只落在罕见的失败路径。
+      **实现**（全在 MainWindow，零 core 接口改动）：
+        - 新增 `rebuildBackend(target)`（stop→换 synth→start）、`currentInstrument()`（快照 backend/path/name/builtin）、
+          `restoreInstrument(snap)`（重建+重载+刷 label，重载失败兜底回内置默认钢琴）；新成员 `current_vst3_path_`。
+        - `onOpenVst3`：先快照，`rebuildBackend(Vst3)+loadInstrument` 成功才更新；失败 `restoreInstrument(prev)` 回滚。
+        - `onOpenSf2`：VST3→SF2 走 rebuild+回滚；同后端换 SF2 仍走 live load（见下，已无缝且安全）。
+        - **core 局部改 1 处**：`FluidSynthEngine::loadInstrument` 改为**先 sfload 新 font 成功再 sfunload 旧 font**
+          （原来先卸后载，失败即静默）——同后端换音色失败时旧音色保留，无音频间断。
+      验收：gui-debug `/W4 /WX` 干净 + headless **83/83** + 冒烟启动正常。**切后端失败回滚人工实测待用户跑。**
 - [ ] **③ 队列丢事件统计**（低/中高）——`event_queue_.push()` 失败现在静默丢。加 atomic 计数 + 状态栏/debug 展示。
 - [ ] **④ VST3 踏板限制提示**（低/中）——真正实现 `IMidiMapping` 成本高，暂不做；至少 UI/状态提示避免用户以为 sustain pedal 坏了。
 - [ ] **⑤ 抽 AudioSession/SynthController**（中高/高，第二阶段）——长期正确方向，但用「小步迁移」，

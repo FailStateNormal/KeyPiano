@@ -1,9 +1,11 @@
 find_package(FluidSynth CONFIG REQUIRED)
 find_package(RtAudio CONFIG REQUIRED)
+find_package(rtmidi CONFIG REQUIRED)
 
 add_library(keypiano_core STATIC
     audio/AudioEngine.cpp
     audio/AudioCallback.cpp
+    midi/MidiInput.cpp
     synth/FluidSynthEngine.cpp
     synth/SynthFactory.cpp
     keymap/KeyMap.cpp
@@ -25,6 +27,7 @@ target_include_directories(keypiano_core PUBLIC
 target_link_libraries(keypiano_core PUBLIC
     FluidSynth::libfluidsynth
     RtAudio::rtaudio
+    RtMidi::rtmidi
 )
 
 target_compile_features(keypiano_core PUBLIC cxx_std_20)

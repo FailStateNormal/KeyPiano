@@ -22,3 +22,4 @@ keypiano_add_test(test_audio_engine)       # event-queue drop counting
 keypiano_add_test(test_audio_callback)     # feedback-queue drop counting
 keypiano_add_test(test_instrument_restore) # backend-switch rollback policy
 keypiano_add_test(test_wav_writer)         # WAV file header / size correctness
+keypiano_add_test(test_midi_decode)        # raw MIDI bytes -> MidiEvent decoding

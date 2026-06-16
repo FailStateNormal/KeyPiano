@@ -48,6 +48,7 @@
 #include "dialogs/SoundFontDialog.h"
 #include "dialogs/SettingsDialog.h"
 #include "export/WavExporter.h"
+#include "midi/MidiInput.h"
 #include "recorder/Recorder.h"
 
 namespace {
@@ -123,8 +124,10 @@ MainWindow::MainWindow(QWidget* parent)
     // ordering invariants (see SynthController.h).
     SynthController::Host host;
     host.beforeEngineStop = [this] {
-        // Uninstall the hook FIRST (joins its thread) so no callback runs while we
-        // release the recorder; then drop the recorder before the engine closes.
+        // Stop external input callbacks (MIDI + keyboard hook) FIRST — joining
+        // their threads — so neither touches the recorder/engine while we release
+        // them; then drop the recorder before the engine closes.
+        closeMidiInput();
         if (hook_) { hook_->uninstall(); hook_.reset(); }
         rec_ctl_->clearRecorder();
     };
@@ -157,6 +160,8 @@ MainWindow::MainWindow(QWidget* parent)
         // A freshly built AudioEngine starts at unity gain — re-apply the user's
         // chosen master volume (same pattern as pedal state above).
         applyMasterVolume();
+        // Reopen the selected MIDI device against the new engine (mirrors the hook).
+        if (engine) openMidiInput();
     };
     host.onInstrumentChanged = [this] { refreshSf2Label(); updateEditorAction(); };
     host.dialogParent = this;
@@ -362,6 +367,13 @@ void MainWindow::setupAudioMenu() {
     connect(act_background_play_, &QAction::toggled,
             this, &MainWindow::setBackgroundPlay);
     audio_menu_->addAction(act_background_play_);
+
+    audio_menu_->addSeparator();
+
+    // MIDI input device picker. Rebuilt on open so hot-plugged devices show up.
+    midi_menu_ = audio_menu_->addMenu(tr("MIDI Input"));
+    connect(midi_menu_, &QMenu::aboutToShow, this, &MainWindow::rebuildMidiMenu);
+    rebuildMidiMenu();
 }
 
 void MainWindow::onVolumeChanged(int percent) {
@@ -402,6 +414,81 @@ void MainWindow::loadAudioPrefs() {
     applyMasterVolume();
 
     setBackgroundPlay(settings.value("background_play", false).toBool());
+
+    // MIDI input device chosen last run (empty = none). Opening is a no-op if the
+    // device is gone or the name is empty.
+    midi_device_name_ = settings.value("midi_device").toString();
+    openMidiInput();
+}
+
+void MainWindow::rebuildMidiMenu() {
+    if (!midi_menu_) return;
+    midi_menu_->clear();
+
+    QAction* none = midi_menu_->addAction(tr("(None)"));
+    none->setCheckable(true);
+    none->setChecked(midi_device_name_.isEmpty());
+    connect(none, &QAction::triggered, this, [this] { setMidiDevice(QString()); });
+
+    const auto ports = midi::MidiInput::availablePorts();
+    if (!ports.empty()) midi_menu_->addSeparator();
+    for (const auto& p : ports) {
+        const QString name = QString::fromStdString(p);
+        QAction* a = midi_menu_->addAction(name);
+        a->setCheckable(true);
+        a->setChecked(name == midi_device_name_);
+        connect(a, &QAction::triggered, this, [this, name] { setMidiDevice(name); });
+    }
+}
+
+void MainWindow::setMidiDevice(const QString& name) {
+    midi_device_name_ = name;
+    QSettings("keypiano", "keypiano").setValue("midi_device", name);
+    closeMidiInput();
+    openMidiInput();
+
+    if (name.isEmpty())
+        statusBar()->showMessage(tr("MIDI input disabled."), 3000);
+    else if (midi_in_ && midi_in_->isOpen())
+        statusBar()->showMessage(tr("MIDI input: %1").arg(name), 3000);
+    else
+        statusBar()->showMessage(tr("Could not open MIDI device: %1").arg(name), 4000);
+}
+
+void MainWindow::openMidiInput() {
+    if (midi_device_name_.isEmpty()) return;
+    if (!synth_ctl_->engine()) return;  // nothing to drive yet
+    if (!midi_in_) midi_in_ = std::make_unique<midi::MidiInput>();
+    midi_in_->openByName(midi_device_name_.toStdString(),
+                         [this](const MidiEvent& ev) { handleMidiInput(ev); });
+}
+
+void MainWindow::closeMidiInput() {
+    if (midi_in_) midi_in_->close();
+}
+
+void MainWindow::handleMidiInput(const MidiEvent& ev) {
+    // Real instrument: not gated by window focus, and no keymap (MIDI is already
+    // note data). Feed the recorder (mutex-serialised with the keyboard/mouse
+    // producers) and post to the engine; key highlighting follows via the audio
+    // thread's feedback queue, same as the keyboard path.
+    rec_ctl_->feed(ev);
+    auto* engine = synth_ctl_->engine();
+    if (!engine) return;
+    switch (ev.type) {
+        case EventType::NoteOn:
+            engine->postNoteOn(ev.chan, ev.note, ev.vel);
+            break;
+        case EventType::NoteOff:
+            engine->postNoteOff(ev.chan, ev.note);
+            break;
+        case EventType::ControlChange:
+            engine->postControlChange(ev.chan, ev.note, ev.vel);
+            break;
+        case EventType::AllNotesOff:
+            engine->postAllNotesOff(ev.chan);
+            break;
+    }
 }
 
 void MainWindow::panicAllNotes() {
@@ -832,6 +919,7 @@ void MainWindow::retranslateUi() {
     // Menus and submenus.
     if (file_menu_)   file_menu_->setTitle(tr("File"));
     if (audio_menu_)  audio_menu_->setTitle(tr("Audio"));
+    if (midi_menu_)   midi_menu_->setTitle(tr("MIDI Input"));
     if (rec_menu_)    rec_menu_->setTitle(tr("Record"));
     if (help_menu_)   help_menu_->setTitle(tr("Help"));
     if (lang_menu_)   lang_menu_->setTitle(tr("&Language"));

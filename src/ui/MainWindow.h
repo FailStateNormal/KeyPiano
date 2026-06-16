@@ -27,6 +27,7 @@ class QTranslator;
 namespace Ui { class MainWindow; }
 QT_END_NAMESPACE
 
+namespace keypiano::midi { class MidiInput; }
 namespace keypiano::ui { class AudioBridge; }
 namespace keypiano::ui { class PianoWidget; }
 namespace keypiano::ui { class KeyboardOverlayWidget; }
@@ -88,6 +89,16 @@ private:
     // Silence every sounding note. Used when the window loses focus while
     // background play is off, so a note whose key-up we will now ignore can't hang.
     void panicAllNotes();
+
+    // ── MIDI input (RtMidi) ──────────────────────────────────────────────────
+    void rebuildMidiMenu();                    // re-enumerate devices on menu open
+    void setMidiDevice(const QString& name);   // select + persist + (re)open
+    void openMidiInput();                       // open the selected device (if any)
+    void closeMidiInput();                      // stop the RtMidi callback thread
+    // Runs on the RtMidi callback thread: routes a decoded MIDI event to the
+    // recorder + engine. Unlike the computer keyboard it is not gated by focus
+    // (a MIDI keyboard is a real instrument) and bypasses the keymap.
+    void handleMidiInput(const MidiEvent& ev);
     void refreshSf2Label();       // rebuild the status-bar instrument label
     void setupToolBar();
     void setupStatusBar();
@@ -116,6 +127,12 @@ private:
     // back into MainWindow (beforeEngineStop/afterEngineStart) to uninstall/install
     // this hook at the exact points required for thread safety.
     std::unique_ptr<KeyboardHook> hook_;
+
+    // MIDI input device. Managed exactly like hook_: closed in beforeEngineStop
+    // and reopened in afterEngineStart so its callback never touches a synth/engine
+    // being swapped. Empty midi_device_name_ means no device selected.
+    std::unique_ptr<midi::MidiInput> midi_in_;
+    QString midi_device_name_;
 
     // Owns the synth backend, audio engine, bridge and instrument state. Created in
     // the constructor; the host callbacks are wired via attach() once the widgets
@@ -164,6 +181,7 @@ private:
 
     QMenu*   file_menu_       = nullptr;
     QMenu*   audio_menu_      = nullptr;
+    QMenu*   midi_menu_       = nullptr;  // "MIDI Input" device submenu (dynamic)
     QMenu*   rec_menu_        = nullptr;
     QMenu*   help_menu_       = nullptr;
     QMenu*   lang_menu_       = nullptr;

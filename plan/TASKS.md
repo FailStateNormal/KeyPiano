@@ -490,6 +490,20 @@
       牵 engine 生命周期 + VST editor，最后动。
 - [x] 验收：windows-gui-debug `/W4 /WX` 干净 + headless **82/82** + 冒烟启动 4s 存活正常关闭。**人工 GUI 实测待用户跑。**
 
+### P7-3 增量：默认音色换真钢琴 GeneralUser GS（2026-06-16）✅
+> 用户反馈合成的 `default_piano.sf2` 太假；Surge 等合成器也合不出真实钢琴。结论：钢琴音色走
+> SF2 + FluidSynth 最合适（采样音色、无 VST3 的 CC 限制）。用户实测真钢琴音满意，权衡后同意分发
+> 包从 ~40MB 涨到 ~70MB（30MB SF2 的运行时 RAM 占比相对 Qt+VST3 宿主很小）。
+- [x] **音色**：GeneralUser GS（S. Christian Collins，自定义宽松授权，允许免费使用+再分发），
+      完整 GM 库 259 preset，preset 0 = 原声大钢琴（正好是引擎默认音色）。下到 `resources/soundfonts/GeneralUser-GS.sf2`（30.8MB）。
+- [x] **不进 qrc**（30MB 会撑大 exe）：CMakeLists POST_BUILD `copy_if_different` 把 SF2 拷到 exe 旁 `soundfonts/`，
+      `EXISTS` 守卫——缺文件也能构建（回退合成钢琴）。
+- [x] **`loadDefaultSoundFont()` 两级**：① 优先加载 `applicationDirPath()/soundfonts/GeneralUser-GS.sf2`；
+      ② 缺失则回退内置合成钢琴（qrc 释放到 %APPDATA%）。状态栏显示 `SF2: GeneralUser-GS.sf2 (built-in)`。
+- [x] **离线验证**（复用 `.verify/sf2check.exe`）：加载 OK、peak 0.0745 出声、rms 比 0.231 自然衰减（真采样钢琴特征）。
+      gui-debug 构建通过 + SF2 部署 30.8MB + 冒烟启动正常。
+- [备注] SF2 已提交进 git（仓库 +30MB，历史永久）；规范做法是 Git LFS，对个人项目过度工程，未用。
+
 ---
 
 ## 跨阶段注意事项

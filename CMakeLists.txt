@@ -96,6 +96,22 @@ if(KEYPIANO_ENABLE_GUI)
             )
         endforeach()
     endif()
+
+    # ── Bundle the default piano SoundFont next to the exe ────────────────────
+    # GeneralUser GS is a real sampled piano (~30 MB) — too large to embed in the
+    # .qrc, so it ships as a loose file in a soundfonts/ folder beside the exe.
+    # loadDefaultSoundFont() loads it at startup and falls back to the tiny
+    # synthetic piano embedded in the .qrc if it is absent. Guarded by EXISTS so
+    # a checkout without the file still builds.
+    set(_default_sf2 "${CMAKE_SOURCE_DIR}/resources/soundfonts/GeneralUser-GS.sf2")
+    if(EXISTS "${_default_sf2}")
+        add_custom_command(TARGET keypiano POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${_default_sf2}"
+                "$<TARGET_FILE_DIR:keypiano>/soundfonts/GeneralUser-GS.sf2"
+            COMMENT "Bundling default SoundFont: GeneralUser-GS.sf2"
+        )
+    endif()
 endif()
 
 # ── Unit tests ────────────────────────────────────────────────────────────────

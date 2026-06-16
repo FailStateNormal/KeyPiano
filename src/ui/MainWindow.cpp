@@ -523,19 +523,33 @@ void MainWindow::setupPianoWidget() {
 }
 
 void MainWindow::loadDefaultSoundFont() {
-    // FluidSynth's sfload() needs a real file path; the SF2 is an embedded Qt
-    // resource, so extract it to a per-user cache file, then load. This gives an
-    // audible piano on first launch without bundling a loose file the user could
-    // lose. (They can still Open SF2 / Open VST3 to change it.)
+    // FluidSynth's sfload() needs a real file path. The preferred default sound
+    // is the bundled GeneralUser GS piano — a real sampled piano shipped as a
+    // loose file beside the exe (too large, ~30 MB, for the .qrc). If it is
+    // missing we fall back to the tiny synthetic piano embedded in the .qrc so
+    // the app is always audible out of the box. (Open SF2 / Open VST3 override
+    // either at runtime.)
     if (!synth_ || current_backend_ != Backend::FluidSynth) return;
 
+    // 1) Preferred: the bundled GeneralUser GS sampled piano next to the exe.
+    const QString bundled =
+        QCoreApplication::applicationDirPath() + "/soundfonts/GeneralUser-GS.sf2";
+    if (QFileInfo::exists(bundled) &&
+        synth_->loadInstrument(bundled.toStdString())) {
+        current_sf2_name_ = "GeneralUser-GS.sf2";
+        sf2_builtin_ = true;
+        current_sf2_path_.clear();  // a default, not a user pick — keep it out of recents
+        refreshSf2Label();
+        return;
+    }
+
+    // 2) Fallback: extract the embedded synthetic piano to a per-user cache file
+    // and load it. Always re-extract so an old build's stale SF2 never shadows
+    // an updated default sound.
     const QString dir =
         QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QDir().mkpath(dir);
     const QString sf2_path = dir + "/default_piano.sf2";
-
-    // Always re-extract so the cached file tracks the embedded resource — an old
-    // build's stale SF2 must never shadow an updated default sound.
     {
         QFile src(":/soundfonts/default_piano.sf2");
         if (!src.open(QIODevice::ReadOnly)) return;

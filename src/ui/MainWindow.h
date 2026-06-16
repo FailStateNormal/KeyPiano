@@ -2,7 +2,6 @@
 #define KEYPIANO_UI_MAINWINDOW_H_
 
 #include <atomic>
-#include <chrono>
 #include <cstdint>
 #include <memory>
 
@@ -11,7 +10,6 @@
 #include "audio/AudioEngine.h"
 #include "keymap/KeyMap.h"
 #include "platform/KeyboardHook.h"
-#include "recorder/Recorder.h"
 #include "synth/SynthesizerBase.h"
 
 #include "I18n.h"
@@ -34,6 +32,7 @@ namespace keypiano::ui { class KeyboardOverlayWidget; }
 namespace keypiano::ui { class PedalIndicatorWidget; }
 namespace keypiano::ui { class Vst3EditorWindow; }
 namespace keypiano::ui { class KeymapController; }
+namespace keypiano::ui { class RecordingController; }
 
 namespace keypiano::ui {
 
@@ -55,9 +54,6 @@ private slots:
     void onOpenVst3();
     void onShowPluginEditor();
     void onOpenSettings();
-    void onStartRecording();
-    void onStop();
-    void onStartPlayback();
     void onShowUsageGuide();
     void onShowAbout();
     void updateStatus();
@@ -87,9 +83,7 @@ private:
     // No UI-thread state is touched directly (rebind capture and record toggles
     // are marshalled back to the UI thread).
     void handleKeyboardEvent(const KeyEvent& kev);
-    void toggleRecordFromHotkey();  // UI-thread: start/stop recording from a Record key
     void loadDefaultSoundFont();// load embedded piano SF2 so the app is audible out of the box
-    void syncRecordActions();
 
     // Closes + detaches the VST3 plug-in editor window if open. Must be called
     // before synth_ is replaced or destroyed (the editor view references it).
@@ -113,12 +107,13 @@ private:
     Ui::MainWindow* ui_ = nullptr;
 
     // Declaration order controls construction sequence:
-    //   synth_ → engine_ → hook_ → recorder_ → audio_bridge_
+    //   synth_ → engine_ → hook_ → audio_bridge_
     // Destruction runs in reverse, so audio_bridge_ (timer) stops before engine_.
+    // The Recorder lives in rec_ctl_; closeEvent()/stopEngine() release it (after
+    // the hook is uninstalled) before engine_ is torn down.
     std::unique_ptr<SynthesizerBase>    synth_;
     std::unique_ptr<audio::AudioEngine> engine_;
     std::unique_ptr<KeyboardHook>       hook_;
-    std::unique_ptr<Recorder>           recorder_;
     std::unique_ptr<AudioBridge>        audio_bridge_;
 
     PianoWidget*             piano_widget_  = nullptr;
@@ -129,6 +124,10 @@ private:
     // Owns the active key map (working copy + immutable hook-thread snapshot),
     // persistence (user.map/presets), and the click-to-rebind flow.
     KeymapController* keymap_ctl_ = nullptr;
+
+    // Owns the Recorder + recording/playback flow and the Record action states.
+    // handleKeyboardEvent() feeds it live events from the hook thread.
+    RecordingController* rec_ctl_ = nullptr;
 
     // Only ever touched on the hook thread (octave/velocity/key-signature
     // actions mutate them; resolve reads them).
@@ -151,10 +150,6 @@ private:
     // clicking the on-screen keys is softened too. Returns vel unchanged if soft
     // is not engaged.
     uint8_t softVelocity(int vel) const;
-
-    // Set just before startRecording() so the hook thread can compute ts_us
-    // for each captured event (happens-before guaranteed via atomic state_).
-    std::chrono::steady_clock::time_point record_start_{};
 
     // Which synth backend is currently active (drives Open SF2 / Open VST3).
     enum class Backend { FluidSynth, Vst3 };

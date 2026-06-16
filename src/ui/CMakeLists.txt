@@ -4,6 +4,7 @@ add_library(keypiano_ui STATIC
     I18n.cpp
     HelpContent.cpp
     KeymapController.cpp
+    RecordingController.cpp
     bridge/AudioBridge.cpp
     widgets/PianoWidget.cpp
     widgets/KeyboardOverlayWidget.cpp

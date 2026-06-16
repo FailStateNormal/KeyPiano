@@ -33,6 +33,7 @@
 #include "HelpContent.h"
 #include "I18n.h"
 #include "KeymapController.h"
+#include "RecordingController.h"
 #include "bridge/AudioBridge.h"
 #include "widgets/PianoWidget.h"
 #include "widgets/KeyboardOverlayWidget.h"
@@ -40,7 +41,7 @@
 #include "widgets/Vst3EditorWindow.h"
 #include "dialogs/SoundFontDialog.h"
 #include "dialogs/SettingsDialog.h"
-#include "recorder/KpsFormat.h"
+#include "recorder/Recorder.h"
 #include "synth/IPluginEditor.h"
 #include "synth/SynthFactory.h"
 
@@ -89,6 +90,13 @@ MainWindow::MainWindow(QWidget* parent)
                 else               statusBar()->showMessage(msg, timeout);
             });
 
+    rec_ctl_ = new RecordingController(this, this);
+    connect(rec_ctl_, &RecordingController::status, this,
+            [this](const QString& msg, int timeout) {
+                if (msg.isEmpty()) statusBar()->clearMessage();
+                else               statusBar()->showMessage(msg, timeout);
+            });
+
     setupMenus();
     setupToolBar();
     setupHelpMenu();
@@ -111,12 +119,12 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     status_timer_->stop();
     closePluginEditor();  // detach plug-in view while synth_ is still alive
     if (piano_widget_) piano_widget_->releaseAll();
-    if (audio_bridge_) audio_bridge_->stop();
-    if (recorder_) {
-        recorder_->stopPlayback();
-        recorder_->stopRecording();
-    }
+    // Uninstall the hook first (joins its thread) so no feed() runs while we
+    // release the recorder; then drop the recorder before engine_ closes, so the
+    // recorder (whose playback dispatch targets engine_) is gone first.
     if (hook_)   hook_->uninstall();
+    if (audio_bridge_) audio_bridge_->stop();
+    if (rec_ctl_) rec_ctl_->clearRecorder();
     if (engine_) engine_->close();
     QMainWindow::closeEvent(event);
 }
@@ -206,13 +214,14 @@ void MainWindow::setupMenus() {
 
     act_rec_start_ = new QAction(tr("&Start Recording"), this);
     act_rec_start_->setShortcut(QKeySequence("Ctrl+R"));
-    connect(act_rec_start_, &QAction::triggered, this, &MainWindow::onStartRecording);
+    connect(act_rec_start_, &QAction::triggered,
+            rec_ctl_, &RecordingController::startRecording);
     rec_menu_->addAction(act_rec_start_);
 
     act_stop_ = new QAction(tr("&Stop"), this);
     act_stop_->setShortcut(QKeySequence("Ctrl+."));
     act_stop_->setEnabled(false);
-    connect(act_stop_, &QAction::triggered, this, &MainWindow::onStop);
+    connect(act_stop_, &QAction::triggered, rec_ctl_, &RecordingController::stop);
     rec_menu_->addAction(act_stop_);
 
     rec_menu_->addSeparator();
@@ -220,8 +229,12 @@ void MainWindow::setupMenus() {
     act_playback_ = new QAction(tr("&Playback"), this);
     act_playback_->setShortcut(QKeySequence("Ctrl+P"));
     act_playback_->setEnabled(false);
-    connect(act_playback_, &QAction::triggered, this, &MainWindow::onStartPlayback);
+    connect(act_playback_, &QAction::triggered,
+            rec_ctl_, &RecordingController::startPlayback);
     rec_menu_->addAction(act_playback_);
+
+    // The controller owns the enabled-state logic for these three actions.
+    rec_ctl_->setActions(act_rec_start_, act_stop_, act_playback_);
 }
 
 void MainWindow::setupHelpMenu() {
@@ -290,12 +303,12 @@ void MainWindow::setupEngine() {
                                 "SF2 playback will be unavailable."));
         engine_.reset();
         synth_.reset();
-        recorder_ = std::make_unique<Recorder>([](const MidiEvent&) {});
+        rec_ctl_->setRecorder(std::make_unique<Recorder>([](const MidiEvent&) {}));
         return;
     }
 
-    recorder_ = std::make_unique<Recorder>(
-        Recorder::makeAudioDispatch(engine_.get()));
+    rec_ctl_->setRecorder(std::make_unique<Recorder>(
+        Recorder::makeAudioDispatch(engine_.get())));
 
     installHook();
 
@@ -343,7 +356,8 @@ void MainWindow::handleKeyboardEvent(const KeyEvent& kev) {
 
     if (res.toggle_record) {
         QMetaObject::invokeMethod(
-            this, [this] { toggleRecordFromHotkey(); }, Qt::QueuedConnection);
+            rec_ctl_, &RecordingController::toggleFromHotkey,
+            Qt::QueuedConnection);
     }
     if (!res.midi) return;
     MidiEvent ev = *res.midi;
@@ -377,13 +391,9 @@ void MainWindow::handleKeyboardEvent(const KeyEvent& kev) {
     if (ev.type == EventType::NoteOn)
         ev.vel = softVelocity(ev.vel);
 
-    if (recorder_ && recorder_->state() == Recorder::State::Recording) {
-        using namespace std::chrono;
-        ev.ts_us = duration_cast<microseconds>(
-                       steady_clock::now() - record_start_)
-                       .count();
-        recorder_->onMidiEvent(ev);
-    }
+    // Record the event (no-op unless recording). The controller timestamps and
+    // appends it; same hook-thread safety invariant as before the extraction.
+    rec_ctl_->feed(ev);
 
     // engine_ is only reassigned by stop/startEngine, which uninstall the hook
     // first — so it cannot be swapped out from under this callback.
@@ -404,14 +414,6 @@ void MainWindow::handleKeyboardEvent(const KeyEvent& kev) {
     }
 }
 
-void MainWindow::toggleRecordFromHotkey() {
-    if (!recorder_) return;
-    if (recorder_->state() == Recorder::State::Recording)
-        onStop();
-    else if (recorder_->state() == Recorder::State::Idle)
-        onStartRecording();
-}
-
 void MainWindow::restartEngine(const audio::AudioEngine::Config& cfg) {
     stopEngine();
     startEngine(cfg);
@@ -419,16 +421,12 @@ void MainWindow::restartEngine(const audio::AudioEngine::Config& cfg) {
 
 void MainWindow::stopEngine() {
     // Uninstall the hook FIRST: uninstall() joins the hook thread, guaranteeing
-    // no callback is running (or will run) before we destroy the recorder_ and
+    // no callback is running (or will run) before we destroy the recorder and
     // engine_ that handleKeyboardEvent() dereferences. Tearing those down while a
     // callback was mid-flight would be a use-after-free on a backend switch.
     if (hook_) { hook_->uninstall(); hook_.reset(); }
     if (audio_bridge_) { audio_bridge_->stop(); audio_bridge_.reset(); }
-    if (recorder_) {
-        recorder_->stopPlayback();
-        recorder_->stopRecording();
-        recorder_.reset();
-    }
+    rec_ctl_->clearRecorder();  // stops playback/recording + releases the recorder
     // engine_->close() blocks until the audio callback has stopped (and shuts
     // down the *current* synth_), so once this returns the caller may safely
     // swap or destroy synth_.
@@ -442,13 +440,13 @@ void MainWindow::startEngine(const audio::AudioEngine::Config& cfg) {
                               tr("Failed to open audio with the new settings.\n"
                                  "Audio is stopped — reopen it from Settings."));
         engine_.reset();
-        recorder_ = std::make_unique<Recorder>([](const MidiEvent&) {});
+        rec_ctl_->setRecorder(std::make_unique<Recorder>([](const MidiEvent&) {}));
         return;
     }
 
     audio_cfg_ = cfg;
-    recorder_ = std::make_unique<Recorder>(
-        Recorder::makeAudioDispatch(engine_.get()));
+    rec_ctl_->setRecorder(std::make_unique<Recorder>(
+        Recorder::makeAudioDispatch(engine_.get())));
     installHook();
 
     // The new synth starts with no pedals down — clear our state + lamps to match.
@@ -569,26 +567,16 @@ void MainWindow::loadDefaultSoundFont() {
 // Rebuilds the status-bar instrument label from the current backend + name. Kept
 // in one place so a language switch can refresh the " (built-in)" suffix.
 void MainWindow::refreshSf2Label() {
+    // Keep the recorder's save-file [meta] title in sync with the instrument
+    // (called on every instrument change). Done here so there is one update point.
+    if (rec_ctl_) rec_ctl_->setRecordingTitle(current_sf2_name_);
+
     if (!lbl_sf2_name_) return;
     const QString prefix =
         (current_backend_ == Backend::Vst3) ? "VST3: " : "SF2: ";
     QString text = prefix + current_sf2_name_;
     if (sf2_builtin_) text += tr(" (built-in)");
     lbl_sf2_name_->setText(text);
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-void MainWindow::syncRecordActions() {
-    auto state = recorder_ ? recorder_->state() : Recorder::State::Idle;
-    bool idle  = (state == Recorder::State::Idle);
-    bool busy  = (state == Recorder::State::Recording) ||
-                 (state == Recorder::State::Playing);
-
-    act_rec_start_->setEnabled(idle);
-    act_stop_->setEnabled(busy);
-    act_playback_->setEnabled(idle && recorder_ &&
-                              recorder_->eventCount() > 0);
 }
 
 // ── Slots ─────────────────────────────────────────────────────────────────────
@@ -729,72 +717,6 @@ void MainWindow::onOpenSettings() {
     statusBar()->showMessage(tr("Audio settings applied."), 3000);
 }
 
-void MainWindow::onStartRecording() {
-    if (!recorder_) return;
-    record_start_ = std::chrono::steady_clock::now();
-    recorder_->startRecording();
-    syncRecordActions();
-    statusBar()->showMessage(tr("Recording..."));
-}
-
-void MainWindow::onStop() {
-    if (!recorder_) return;
-
-    auto state = recorder_->state();
-    if (state == Recorder::State::Playing) {
-        recorder_->stopPlayback();
-        syncRecordActions();
-        statusBar()->showMessage(tr("Playback stopped."), 3000);
-        return;
-    }
-
-    recorder_->stopRecording();
-    syncRecordActions();
-
-    auto n = static_cast<int>(recorder_->eventCount());
-    statusBar()->showMessage(tr("Recording stopped — %1 events.").arg(n));
-
-    if (n == 0) return;
-
-    auto reply = QMessageBox::question(
-        this, tr("Save Recording"),
-        tr("Save %1 event(s) to file?").arg(n),
-        QMessageBox::Yes | QMessageBox::No);
-    if (reply != QMessageBox::Yes) return;
-
-    QString path = QFileDialog::getSaveFileName(
-        this, tr("Save Recording"), {},
-        tr("keypiano performance (*.kps);;All files (*)"));
-    if (path.isEmpty()) return;
-    if (!path.endsWith(".kps", Qt::CaseInsensitive)) path += ".kps";
-
-    KpsMeta meta;
-    meta.title = current_sf2_name_.toStdString();
-    std::string err;
-    if (!recorder_->saveToFile(path.toStdString(), meta, &err)) {
-        QMessageBox::critical(this, tr("Save Error"),
-                              tr("Failed to save:\n%1")
-                                  .arg(QString::fromStdString(err)));
-    } else {
-        statusBar()->showMessage(
-            tr("Saved: %1").arg(QFileInfo(path).fileName()), 5000);
-    }
-}
-
-void MainWindow::onStartPlayback() {
-    if (!recorder_) return;
-    if (!recorder_->startPlayback()) {
-        QMessageBox::information(this, tr("Playback"),
-                                 tr("Nothing to play back.\n"
-                                    "Record something first."));
-        return;
-    }
-    syncRecordActions();
-    statusBar()->showMessage(
-        tr("Playing back %1 event(s)...")
-            .arg(static_cast<int>(recorder_->eventCount())));
-}
-
 void MainWindow::updateStatus() {
     if (engine_ && engine_->isOpen()) {
         const auto& s = engine_->stats();
@@ -805,7 +727,7 @@ void MainWindow::updateStatus() {
         lbl_cpu_->setText(
             tr("CPU: %1%").arg(cpu * 100.0, 0, 'f', 1));
     }
-    syncRecordActions();
+    rec_ctl_->syncActions();
 }
 
 // ── Language / Help ─────────────────────────────────────────────────────────────

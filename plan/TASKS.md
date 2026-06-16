@@ -504,6 +504,26 @@
       gui-debug 构建通过 + SF2 部署 30.8MB + 冒烟启动正常。
 - [备注] SF2 已提交进 git（仓库 +30MB，历史永久）；规范做法是 Git LFS，对个人项目过度工程，未用。
 
+### P7-3 增量：抽出 RecordingController（2026-06-16）✅
+> 兑现上面「下一个结构整理目标定为 RecordingController」的结构决策。照 KeymapController 已验证的
+> 套路抽成 `src/ui/RecordingController.{h,cpp}`（QObject 子类，MainWindow 的子对象）。
+- [x] **职责**：接管 Recorder 所有权 + 录制/回放流程（含保存对话框）+ Record/Stop/Playback 三个 action 的
+      启用态 + 热键 toggle + hook 线程喂事件。UI 槽 `startRecording/stop/startPlayback/toggleFromHotkey`，
+      状态用 `status(QString,int)` 信号发回状态栏（复用 MainWindow 现成的转发 lambda）。
+- [x] **生命周期解耦**：recorder 由 MainWindow 构建（它持 engine 供 dispatch），经 `setRecorder()` 交给控制器；
+      `clearRecorder()` 停播放/录制并释放。MainWindow 保证**先卸 hook（join 线程）再 clearRecorder**，
+      所以 hook 线程的 `feed()` 永不与指针 swap/reset 竞态（与抽取前同一不变式）。
+- [x] **closeEvent 重排**：原来「停 recorder → 卸 hook」改为「**卸 hook → 停 bridge → clearRecorder → 关 engine**」，
+      保证 recorder（其回放 dispatch 指向 engine_）在 engine_ 之前销毁，消除潜在 UAF。
+- [x] **happens-before 保留**：`record_start_` 仍在 `startRecording()` 里于 `recorder_->startRecording()`（seq_cst
+      store state_）之前写；`feed()` 读 state_(acquire)==Recording 后再读 record_start_。语义逐字不变。
+- [x] **I18n 不受影响**：自定义 Translator 忽略 tr() context、只按源文本匹配（I18n.h 注释），录制相关字符串
+      移到新类后中文仍生效。
+- [x] **MainWindow.cpp 813→758 行**（−55；录制方法整体搬走，扣除新接线净减）；MainWindow.h 同步瘦身。
+- [x] 验收：windows-gui-debug `/W4 /WX` 干净 + headless **82/82** + 冒烟启动正常。**录制/回放人工实测待用户跑。**
+- [结构决策更新] 剩 `SynthController`（engine 生命周期 + VST3 editor + 后端切换 + SF2/VST3 加载），耦合最深，
+      留最后。本轮未动。
+
 ---
 
 ## 跨阶段注意事项

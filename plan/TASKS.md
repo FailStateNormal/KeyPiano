@@ -4,6 +4,25 @@
 
 ---
 
+## 当前状态（2026-06-16，告一段落）
+
+Phase 1–4（计划全部阶段）+ P5–P8 易用性 + P7-3 健壮性加固 + 一轮用户易用性请求（内置默认音色入对话框 /
+快捷键说明 / 打开已保存录音 / 抽出 SynthController / 顶层菜单去字母助记键 / 回滚决策纯函数）**全部完成**。
+
+- **架构**：MainWindow 已是瘦装配器；三个 QObject 子控制器 `KeymapController` / `RecordingController` /
+  `SynthController`（后者本轮抽出，掌 synth/engine/bridge 生命周期 + 后端切换回滚 + SF2/VST3 加载 + VST3 编辑器，
+  经 `beforeEngineStop`/`afterEngineStart` 两个时序关键回调与 MainWindow 协作，保留 hook/recorder 拆装铁律）。
+- **验收**：headless **96/96**；gui-debug `/W4 /WX` 干净；冒烟启动有序拆卸退出码 0。
+- **分发**：`dist/keypiano-1.0.0-win64.zip`（68.9MB，自包含，含 GeneralUser-GS.sf2）；已推送 origin/main（HEAD eec8318）。
+- **仍待用户人工 GUI 实测**（headless 测不到）：打开录音回放、切后端/回滚/插件编辑器、中文路径存读、
+  内置默认项选回、踏板提示、F/R/H 不再误开菜单。
+- **明确不做**：`IAudioEngine` 注入缝（UAF/hook 是真线程 bug，假引擎只给伪安全感，性价比低）；
+  完整 VST3 CC/踏板 IMidiMapping；Qt .ts/.qm 国际化迁移。
+
+详见下方 `### P7-3 增量` 各小节。后续如需继续再说。
+
+---
+
 ## Phase 1 — 核心引擎（能响）
 
 ### P1-A  工程骨架  【Sonnet 4.6】

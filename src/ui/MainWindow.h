@@ -84,6 +84,10 @@ private:
     // are marshalled back to the UI thread).
     void handleKeyboardEvent(const KeyEvent& kev);
     void loadDefaultSoundFont();// load embedded piano SF2 so the app is audible out of the box
+    // Absolute path to the bundled GeneralUser GS piano next to the exe, or empty
+    // if it isn't there. Shared by loadDefaultSoundFont() and the Open SF2 dialog
+    // (which pins it as a "built-in default" entry).
+    QString bundledDefaultSf2Path() const;
 
     // Closes + detaches the VST3 plug-in editor window if open. Must be called
     // before synth_ is replaced or destroyed (the editor view references it).

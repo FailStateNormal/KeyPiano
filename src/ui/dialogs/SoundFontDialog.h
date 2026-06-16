@@ -25,6 +25,11 @@ public:
     // Pre-populate the selected path (e.g., the currently loaded SF2).
     void setInitialPath(const QString& path);
 
+    // Pin a non-removable "built-in default" entry at the top of the list, so the
+    // user can always get back to the bundled sound after switching away. `label`
+    // is the display name; `path` is the real file selecting it returns.
+    void setBuiltinDefault(const QString& path, const QString& label);
+
     // Returns the path chosen by the user (non-empty only after Accepted).
     QString selectedPath() const { return selected_path_; }
 
@@ -40,7 +45,9 @@ private:
     void loadRecents();
     void saveRecents();
     void refreshList();          // rebuild the list widget from recents_
-    void applyPath(const QString& path);
+    // `remember == false` selects the path without adding it to the recent list
+    // (used for the built-in default, which is pinned separately).
+    void applyPath(const QString& path, bool remember = true);
 
     QListWidget*     recents_list_  = nullptr;
     QLabel*          path_label_    = nullptr;
@@ -50,6 +57,8 @@ private:
 
     QString selected_path_;
     QStringList recents_;
+    QString builtin_path_;   // bundled default, pinned + non-removable (may be empty)
+    QString builtin_label_;
 };
 
 } // namespace keypiano::ui

@@ -553,9 +553,8 @@ void MainWindow::loadDefaultSoundFont() {
     if (!synth_ || current_backend_ != Backend::FluidSynth) return;
 
     // 1) Preferred: the bundled GeneralUser GS sampled piano next to the exe.
-    const QString bundled =
-        QCoreApplication::applicationDirPath() + "/soundfonts/GeneralUser-GS.sf2";
-    if (QFileInfo::exists(bundled) &&
+    const QString bundled = bundledDefaultSf2Path();
+    if (!bundled.isEmpty() &&
         synth_->loadInstrument(bundled.toStdString())) {
         current_sf2_name_ = "GeneralUser-GS.sf2";
         sf2_builtin_ = true;
@@ -585,6 +584,12 @@ void MainWindow::loadDefaultSoundFont() {
         sf2_builtin_ = true;
         refreshSf2Label();
     }
+}
+
+QString MainWindow::bundledDefaultSf2Path() const {
+    const QString p =
+        QCoreApplication::applicationDirPath() + "/soundfonts/GeneralUser-GS.sf2";
+    return QFileInfo::exists(p) ? p : QString();
 }
 
 // Rebuilds the status-bar instrument label from the current backend + name. Kept
@@ -667,6 +672,10 @@ void MainWindow::restoreInstrument(const InstrumentState& s) {
 
 void MainWindow::onOpenSf2() {
     SoundFontDialog dlg(this);
+    // Pin the bundled GeneralUser GS piano so the user can always pick it back,
+    // even though it's never stored in the recent list.
+    if (const QString bundled = bundledDefaultSf2Path(); !bundled.isEmpty())
+        dlg.setBuiltinDefault(bundled, QStringLiteral("GeneralUser-GS.sf2"));
     dlg.setInitialPath(current_sf2_path_);  // full path, or empty for built-in
     if (dlg.exec() != QDialog::Accepted) return;
 
@@ -701,10 +710,17 @@ void MainWindow::onOpenSf2() {
         }
     }
 
+    // If the user picked the bundled default, keep our state consistent with
+    // loadDefaultSoundFont(): mark it built-in and keep it out of the recents path.
+    const QString bundled = bundledDefaultSf2Path();
+    const bool is_builtin =
+        !bundled.isEmpty() &&
+        QFileInfo(path).canonicalFilePath() == QFileInfo(bundled).canonicalFilePath();
+
     current_sf2_name_ = QFileInfo(path).fileName();
-    current_sf2_path_ = path;
+    current_sf2_path_ = is_builtin ? QString() : path;
     current_vst3_path_.clear();
-    sf2_builtin_ = false;
+    sf2_builtin_ = is_builtin;
     refreshSf2Label();
     updateEditorAction();
     statusBar()->showMessage(tr("Loaded: %1").arg(current_sf2_name_), 3000);

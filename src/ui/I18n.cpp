@@ -156,6 +156,7 @@ Translator::Translator(QObject* parent) : QTranslator(parent) {
         {"Clear All", QStringLiteral("全部清除")},
         {"Browse...", QStringLiteral("浏览...")},
         {"(none selected)", QStringLiteral("（未选择）")},
+        {"  (built-in default)", QStringLiteral("  （内置默认）")},
         {"SoundFont 2 (*.sf2);;All files (*)",
          QStringLiteral("SoundFont 2 (*.sf2);;所有文件 (*)")},
 

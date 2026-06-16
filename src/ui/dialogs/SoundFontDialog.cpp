@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
+#include <QListWidgetItem>
 #include <QPushButton>
 #include <QSettings>
 #include <QVBoxLayout>
@@ -74,6 +75,12 @@ void SoundFontDialog::setInitialPath(const QString& path) {
     if (!path.isEmpty()) applyPath(path);
 }
 
+void SoundFontDialog::setBuiltinDefault(const QString& path, const QString& label) {
+    builtin_path_  = path;
+    builtin_label_ = label;
+    refreshList();
+}
+
 void SoundFontDialog::loadRecents() {
     QSettings cfg("keypiano", "keypiano");
     recents_ = cfg.value("recent_sf2").toStringList();
@@ -100,34 +107,50 @@ void SoundFontDialog::saveRecents() {
 
 void SoundFontDialog::refreshList() {
     recents_list_->clear();
-    for (const auto& p : recents_)
-        recents_list_->addItem(QFileInfo(p).fileName() + "  [" + p + "]");
+    // The built-in default (if any) is pinned at the top and carries its real
+    // path in UserRole, like every other row, so selection logic is uniform.
+    if (!builtin_path_.isEmpty()) {
+        auto* it = new QListWidgetItem(
+            builtin_label_ + tr("  (built-in default)"));
+        it->setData(Qt::UserRole, builtin_path_);
+        recents_list_->addItem(it);
+    }
+    for (const auto& p : recents_) {
+        auto* it = new QListWidgetItem(QFileInfo(p).fileName() + "  [" + p + "]");
+        it->setData(Qt::UserRole, p);
+        recents_list_->addItem(it);
+    }
 }
 
-void SoundFontDialog::applyPath(const QString& path) {
+void SoundFontDialog::applyPath(const QString& path, bool remember) {
     selected_path_ = path;
     path_label_->setText(path);
 
-    recents_.removeAll(path);
-    recents_.prepend(path);
-    while (recents_.size() > kMaxRecents)
-        recents_.removeLast();
-    saveRecents();
-
-    refreshList();
+    if (remember) {
+        recents_.removeAll(path);
+        recents_.prepend(path);
+        while (recents_.size() > kMaxRecents)
+            recents_.removeLast();
+        saveRecents();
+        refreshList();
+    }
     updateOkButton();
 }
 
 void SoundFontDialog::onRecentSelectionChanged() {
-    remove_btn_->setEnabled(recents_list_->currentRow() >= 0);
+    auto* it = recents_list_->currentItem();
+    // The built-in default is pinned and cannot be removed.
+    remove_btn_->setEnabled(
+        it && it->data(Qt::UserRole).toString() != builtin_path_);
 }
 
 void SoundFontDialog::removeSelectedRecent() {
-    int row = recents_list_->currentRow();
-    if (row < 0 || row >= recents_.size()) return;
+    auto* it = recents_list_->currentItem();
+    if (!it) return;
+    const QString removed = it->data(Qt::UserRole).toString();
+    if (removed.isEmpty() || removed == builtin_path_) return;  // never the built-in
 
-    const QString removed = recents_[row];
-    recents_.removeAt(row);
+    recents_.removeAll(removed);
     saveRecents();
     refreshList();
 
@@ -155,9 +178,12 @@ void SoundFontDialog::browse() {
 }
 
 void SoundFontDialog::onRecentActivated() {
-    int row = recents_list_->currentRow();
-    if (row >= 0 && row < recents_.size())
-        applyPath(recents_[row]);
+    auto* it = recents_list_->currentItem();
+    if (!it) return;
+    const QString path = it->data(Qt::UserRole).toString();
+    if (path.isEmpty()) return;
+    // The built-in default must not be added to the recent list.
+    applyPath(path, /*remember=*/path != builtin_path_);
 }
 
 void SoundFontDialog::updateOkButton() {

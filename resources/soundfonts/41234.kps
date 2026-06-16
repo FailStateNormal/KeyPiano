@@ -1,0 +1,30 @@
+# keypiano performance sequence v1
+[meta]
+title = GeneralUser-GS.sf2
+created = 
+duration_us = 0
+event_count = 22
+[events]
+# ts_us type chan note vel
+668909 NoteOn 0 60 80
+778425 NoteOff 0 60 0
+917555 NoteOn 0 53 80
+921432 NoteOn 0 48 80
+923501 NoteOn 0 50 80
+953540 NoteOn 0 52 80
+1063563 NoteOff 0 50 0
+1067557 NoteOff 0 52 0
+1071461 NoteOff 0 48 0
+1209539 NoteOff 0 53 0
+1259552 NoteOn 0 49 80
+1279511 NoteOn 0 51 80
+1413495 NoteOff 0 49 0
+1437429 NoteOff 0 51 0
+1641465 NoteOn 0 48 80
+1653435 NoteOn 0 53 80
+1677466 NoteOn 0 50 80
+1679474 NoteOn 0 52 80
+1767435 NoteOff 0 52 0
+1769456 NoteOff 0 50 0
+1825451 NoteOff 0 48 0
+1861491 NoteOff 0 53 0

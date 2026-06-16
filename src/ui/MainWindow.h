@@ -60,6 +60,7 @@ private slots:
     void onOpenSettings();
     void onShowUsageGuide();
     void onShowAbout();
+    void onExportWav();   // offline-render the current recording to a .wav file
     void updateStatus();
 
 private:
@@ -188,6 +189,7 @@ private:
     QAction* act_stop_        = nullptr;
     QAction* act_playback_    = nullptr;
     QAction* act_open_rec_    = nullptr;
+    QAction* act_export_wav_  = nullptr;
     QAction* act_usage_guide_ = nullptr;
     QAction* act_about_       = nullptr;
     QAction* act_lang_en_     = nullptr;

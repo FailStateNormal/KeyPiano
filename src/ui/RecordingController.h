@@ -60,6 +60,12 @@ public:
     // Refresh the enabled state of the Record / Stop / Playback actions.
     void syncActions();
 
+    // Snapshot of the recorded events (empty if no recorder / nothing recorded).
+    // Used by MainWindow's "Export to WAV" to offline-render the buffer.
+    std::vector<MidiEvent> recordedEvents() const {
+        return recorder_ ? recorder_->events() : std::vector<MidiEvent>{};
+    }
+
 public slots:
     void startRecording();
     void stop();

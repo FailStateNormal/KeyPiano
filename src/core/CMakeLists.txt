@@ -14,6 +14,8 @@ add_library(keypiano_core STATIC
     keymap/KeyMapSerializer.cpp
     recorder/KpsFormat.cpp
     recorder/Recorder.cpp
+    export/WavWriter.cpp
+    export/WavExporter.cpp
 )
 
 target_include_directories(keypiano_core PUBLIC

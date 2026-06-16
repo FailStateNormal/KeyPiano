@@ -64,6 +64,14 @@ class Recorder {
   bool loadFromFile(const std::string& path, KpsMeta* meta,
                     std::string* err = nullptr);
 
+  // Snapshot of the recorded events (the first eventCount()). Call in Idle state
+  // only. Used by the WAV exporter to offline-render the captured buffer.
+  std::vector<MidiEvent> events() const {
+    const size_t n = event_count_.load(std::memory_order_acquire);
+    return std::vector<MidiEvent>(events_.begin(),
+                                  events_.begin() + static_cast<std::ptrdiff_t>(n));
+  }
+
   // Builds a DispatchFn that routes events to the given AudioEngine.
   static DispatchFn makeAudioDispatch(audio::AudioEngine* engine);
 

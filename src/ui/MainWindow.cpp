@@ -7,6 +7,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QCursor>
 #include <QDialog>
 #include <QDir>
 #include <QEvent>
@@ -46,6 +47,7 @@
 #include "widgets/PedalIndicatorWidget.h"
 #include "dialogs/SoundFontDialog.h"
 #include "dialogs/SettingsDialog.h"
+#include "export/WavExporter.h"
 #include "recorder/Recorder.h"
 
 namespace {
@@ -308,6 +310,12 @@ void MainWindow::setupMenus() {
     connect(act_open_rec_, &QAction::triggered,
             rec_ctl_, &RecordingController::openRecording);
     rec_menu_->addAction(act_open_rec_);
+
+    rec_menu_->addSeparator();
+
+    act_export_wav_ = new QAction(tr("Export to &WAV..."), this);
+    connect(act_export_wav_, &QAction::triggered, this, &MainWindow::onExportWav);
+    rec_menu_->addAction(act_export_wav_);
 
     // The controller owns the enabled-state logic for these three actions.
     rec_ctl_->setActions(act_rec_start_, act_stop_, act_playback_);
@@ -860,6 +868,7 @@ void MainWindow::retranslateUi() {
     if (act_stop_)      act_stop_->setText(tr("&Stop"));
     if (act_playback_)  act_playback_->setText(tr("&Playback"));
     if (act_open_rec_)  act_open_rec_->setText(tr("&Open Recording..."));
+    if (act_export_wav_) act_export_wav_->setText(tr("Export to &WAV..."));
 
     // Help menu actions.
     if (act_usage_guide_) act_usage_guide_->setText(tr("&Usage Guide..."));
@@ -911,6 +920,59 @@ void MainWindow::onShowAbout() {
                 "your own SF2 SoundFonts or VST3 instrument plug-ins.</p>"
                 "<p>Released as open source under the GPL v3 license.</p>"));
     }
+}
+
+void MainWindow::onExportWav() {
+    // Snapshot the recorded events (Idle state — playback/recording aren't running
+    // while the user navigates the menu).
+    auto events = rec_ctl_->recordedEvents();
+    if (events.empty()) {
+        QMessageBox::information(
+            this, tr("Export to WAV"),
+            tr("Nothing to export.\nRecord something first."));
+        return;
+    }
+
+    const QString path = QFileDialog::getSaveFileName(
+        this, tr("Export to WAV"), QString(),
+        tr("WAV audio (*.wav);;All files (*)"));
+    if (path.isEmpty()) return;
+
+    // The exporter is FluidSynth-based. Render with the user's SF2, falling back
+    // to the bundled default; on the VST3 backend we still use the SF2 and say so.
+    QString sf2 = synth_ctl_->currentSf2Path();
+    if (sf2.isEmpty()) sf2 = synth_ctl_->bundledDefaultSf2Path();
+    if (sf2.isEmpty()) {
+        QMessageBox::warning(this, tr("Export to WAV"),
+                             tr("No SoundFont is available to render the export."));
+        return;
+    }
+    const bool note_vst3 =
+        synth_ctl_->currentBackend() == SynthController::Backend::Vst3;
+
+    exporter::WavExportOptions opts;
+    opts.sample_rate = synth_ctl_->config().sample_rate;
+    // Match what the user hears: apply the same master-volume mapping as playback.
+    opts.gain = volume_slider_
+        ? static_cast<float>(volume_slider_->value()) / 100.0f * audio::kMaxMasterGain
+        : 1.0f;
+
+    std::string err;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const bool ok = exporter::exportEventsToWav(
+        events, sf2.toStdString(), path.toStdString(), opts, &err);
+    QApplication::restoreOverrideCursor();
+
+    if (!ok) {
+        QMessageBox::critical(
+            this, tr("Export to WAV"),
+            tr("Export failed:\n%1").arg(QString::fromStdString(err)));
+        return;
+    }
+
+    QString msg = tr("Exported: %1").arg(QFileInfo(path).fileName());
+    if (note_vst3) msg += tr(" (rendered with the SF2 piano, not the VST3 plugin)");
+    statusBar()->showMessage(msg, 5000);
 }
 
 } // namespace keypiano::ui

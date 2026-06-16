@@ -2,8 +2,8 @@
 
 A modern Windows virtual piano, rewritten from scratch in C++20. It turns your
 computer keyboard into a playable instrument with low-latency SF2 (SoundFont)
-synthesis, performance recording/playback, a Qt6 GUI, and VST3 instrument
-hosting.
+synthesis, performance recording/playback (with WAV export), MIDI-keyboard input,
+a Qt6 GUI, and VST3 instrument hosting.
 
 keypiano takes inspiration from [FreePiano](https://github.com/freepiano/freepiano)
 (notably its `.map` keyboard-layout format, which keypiano parses for
@@ -11,9 +11,9 @@ compatibility) but shares no code with it. It is an independent, GPL v3 project.
 
 ## Status
 
-Feature-complete. All four planned phases — plus a round of usability and
-robustness work — are done. The audio engine, recording, Qt6 GUI, VST3 hosting,
-and packaging all ship.
+Feature-complete. All four planned phases — plus rounds of usability, robustness,
+and feature work (master volume, background play, MIDI input, WAV export) — are
+done. The audio engine, recording, Qt6 GUI, VST3 hosting, and packaging all ship.
 
 | Phase | Goal | State |
 |-------|------|-------|
@@ -22,7 +22,7 @@ and packaging all ship.
 | 3 | Qt6 Widgets GUI — visual piano | ✅ complete |
 | 4 | VST3 instrument hosting + packaging | ✅ complete |
 
-**96/96** unit tests pass; release builds produce a self-contained, ready-to-zip
+**109/109** unit tests pass; release builds produce a self-contained, ready-to-zip
 folder. Grab a build from the [Releases](../../releases) page, or build it
 yourself (below).
 
@@ -41,9 +41,14 @@ yourself (below).
 - **Remappable keyboard** — click a key and press a physical key to rebind it;
   clear bindings; save/switch named layouts (presets). Parses both FreePiano 2.0
   and 2.1 `.map` syntax.
-- **Recording** — capture a performance to a readable, Git-friendly `.kps` text
-  file with microsecond precision; replay it, or open and play back any saved
-  `.kps` later.
+- **Recording & WAV export** — capture a performance to a readable, Git-friendly
+  `.kps` text file with microsecond precision; replay it, open any saved `.kps`,
+  or render it offline to a shareable `.wav` audio file.
+- **MIDI keyboard input** — play with a real MIDI keyboard or controller (RtMidi);
+  pick the device from the Audio menu.
+- **Master volume & background play** — a master volume slider, plus an optional
+  "background play" mode to keep playing while another window is focused (off by
+  default, so it never steals your keystrokes).
 - **Bilingual UI** — switch between English and 简体中文 at any time; full Unicode
   (Chinese) file-path support.
 

@@ -74,6 +74,10 @@ You'll be asked to save a <code>.kps</code> file.</li>
 <li><b>Record &rarr; Playback</b> (Ctrl+P) replays what you just recorded.</li>
 <li><b>Record &rarr; Open Recording...</b> (Ctrl+Shift+P) opens any saved
 <code>.kps</code> file and plays it back.</li>
+<li><b>Record &rarr; Export to WAV...</b> — render the current recording (the one
+you just captured, or one you opened) to a <code>.wav</code> audio file you can
+share. You need something recorded or opened first; it renders with the SF2 piano
+sound.</li>
 </ul>
 
 <h3>6. Settings &amp; language</h3>
@@ -83,7 +87,23 @@ buffer size (smaller buffer = lower latency).</li>
 <li><b>Help &rarr; Language</b> — switch between English and 简体中文 at any time.</li>
 </ul>
 
-<h3>7. Keyboard shortcuts</h3>
+<h3>7. Volume, background play &amp; MIDI input</h3>
+<p>The <b>Audio</b> menu gathers the sound-related options:</p>
+<ul>
+<li><b>Volume</b> — a master volume slider you can drag right inside the menu. Full
+scale is a 3&times; boost, since the bare SoundFont output is fairly quiet; turn it
+down if loud passages clip. Remembered between sessions.</li>
+<li><b>Background Play</b> — off by default: keys play only while the keypiano
+window is focused, so typing in other apps won't trigger notes. Turn it on to keep
+playing while another window is in front (handy with a small keypiano window on top
+of a score or video). While it is off, leaving the window also silences any notes
+still held.</li>
+<li><b>MIDI Input</b> — if you have a MIDI keyboard or controller, pick it here to
+play keypiano with real keys and velocity. The submenu lists the connected devices;
+choose <b>(None)</b> to turn MIDI input off. Remembered between sessions.</li>
+</ul>
+
+<h3>8. Keyboard shortcuts</h3>
 <p><b>Playing keys</b> (default keymap — remap them under <b>File &rarr; Rebind
 Keys</b>):</p>
 <table border="1" cellspacing="0" cellpadding="4">
@@ -172,6 +192,8 @@ QString usageGuideHtmlZh() {
 <li><b>录制 &rarr; 回放</b>（Ctrl+P）重播刚才录下的内容。</li>
 <li><b>录制 &rarr; 打开录音...</b>（Ctrl+Shift+P）打开任意已保存的
 <code>.kps</code> 文件并回放。</li>
+<li><b>录制 &rarr; 导出为 WAV...</b>——把当前录制内容（刚录的，或打开的那段）渲染成
+<code>.wav</code> 音频文件，方便分享。需要先有录制或打开的内容才能导出；导出使用 SF2 钢琴音色渲染。</li>
 </ul>
 
 <h3>6. 设置与语言</h3>
@@ -180,7 +202,19 @@ QString usageGuideHtmlZh() {
 <li><b>帮助 &rarr; 语言</b>——可随时在 English 与 简体中文 之间切换。</li>
 </ul>
 
-<h3>7. 快捷键</h3>
+<h3>7. 音量、后台演奏与 MIDI 输入</h3>
+<p><b>音频</b>菜单集中了与声音相关的选项：</p>
+<ul>
+<li><b>音量</b>——主音量滑块，可直接在菜单里拖动。满刻度是 3 倍增益（裸 SoundFont 输出偏轻）；
+若强奏时破音就调低一点。设置会在重启后保留。</li>
+<li><b>后台演奏</b>——默认关闭：只有 keypiano 窗口处于前台时按键才发声，这样在别的程序里打字
+不会误触发音符。开启后即使别的窗口在前面也能继续弹（配合置顶的小窗看谱/看视频很方便）。
+关闭状态下，切走窗口还会顺手静音正在按住的音。</li>
+<li><b>MIDI 输入</b>——如果你有 MIDI 键盘或控制器，在这里选中它就能用真实琴键（带真实力度）弹奏
+keypiano。子菜单会列出已连接的设备；选<b>（无）</b>则关闭 MIDI 输入。选择会被记住。</li>
+</ul>
+
+<h3>8. 快捷键</h3>
 <p><b>演奏按键</b>（默认键位，可在<b>文件 &rarr; 重绑按键</b>中修改）：</p>
 <table border="1" cellspacing="0" cellpadding="4">
 <tr><td><b>Z X C V B N M</b></td><td>低八度白键（C3–B3）</td></tr>

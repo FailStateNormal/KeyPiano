@@ -4,6 +4,19 @@
 
 ---
 
+## 当前状态（2026-06-17，又一轮功能后告一段落）
+
+承下方"2026-06-16 告一段落"之后，应用户要求又加了一轮功能并补齐文档（HelpContent 中英 / README / 本文件）：
+- **主音量**（输出级 master gain，滑块满刻度 3×）、**后台演奏**（默认关，失焦静音）——Audio 菜单，QSettings 持久化。
+- **WAV 导出**（Record 菜单）：离线渲染录制缓冲为 `.wav`；自写 `WavWriter`（不依赖 libsndfile/MMIO）+ `WavExporter`（临时 FluidSynth 按 ts_us 推进逐块渲染）。无录制/打开内容则不能导出。
+- **MIDI 输入**（依赖加 `rtmidi`）：`midi/MidiInput`，Audio 菜单选设备，生命周期与键盘钩子并列（`beforeEngineStop` 关 / `afterEngineStart` 开，防切后端 UAF）。
+- **清理**：发行包剥离 Qt 插件 `.pdb`（`cmake/strip_qt_pdb.cmake`），zip 68.9→约 53.7MB。
+- **验收**：headless **109/109**；gui-debug + release 编译链接通过。
+- **仍待人工实测**：WAV 录→导出→播放听；MIDI 需真实设备；以及上一轮遗留的 GUI 实测项。
+- **挂起**：一键和弦（与"真实钢琴"定位有张力，按需再定）。
+
+---
+
 ## 当前状态（2026-06-16，告一段落）
 
 Phase 1–4（计划全部阶段）+ P5–P8 易用性 + P7-3 健壮性加固 + 一轮用户易用性请求（内置默认音色入对话框 /

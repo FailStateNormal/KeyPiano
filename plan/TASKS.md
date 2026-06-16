@@ -566,7 +566,14 @@
       `current_backend_` 在 hook 线程读安全（切后端先卸 hook）。验收：gui-debug `/W4 /WX` 干净 + 冒烟启动正常。
 - [ ] **⑤ 抽 AudioSession/SynthController**（中高/高，第二阶段）——长期正确方向，但用「小步迁移」，
       等 ② 后端切换回滚改完再顺手收 `stopEngine/startEngine/synth_` 重复逻辑，不一次拆穿 MainWindow。
-- [ ] **⑥ 生命周期测试**（中/中高）——补后端切换、失败路径测试，等 ⑤ 抽出后再测更划算。
+- [~] **⑥ 生命周期/失败路径测试（2026-06-16，部分完成）**——用户选择「跳过 ⑤，先做 ⑥ 可做的部分」。
+      core 测试套件无 UI/无音频设备/无外部文件，能做的失败路径有限：
+        - **已补**：`tests/test_audio_engine.cpp`（3 个）测 ③ 的 `event_drops` 计数——engine 不 open（无回调排空队列），
+          posts 超过 `kEventQueueCapacity`(1024) 即丢弃并计数；顺带验证队列恰好容纳 1024、各 post* 变体都计入、初值为 0。
+        - **已覆盖（之前）**：KpsFormat 读缺失文件 / 写坏路径 / 中文路径往返；Recorder 缺文件 / 超容量。
+      **仍缺（需 ⑤ 先抽出 SynthController 才好测）**：后端切换失败回滚（②）、切后端 UAF、hook 生命周期——这些是 UI 层、
+      依赖 MainWindow 真实引擎，headless 测不了。`feedback_drops`（audio 回调里计）也暂未单测（需构造 CallbackContext）。
+      验收：headless **86/86**（+3）。
 - [暂缓] Qt `.ts/.qm` 国际化迁移（手写 I18n 仍能撑）、完整 VST3 CC/踏板实现（涉及参数映射+插件兼容，先提示限制）。
 - [x] **bugfix：鼠标点击的音符现在能被录制（2026-06-16）**——根因：键盘走 `handleKeyboardEvent→feed()`，
       而 `setupPianoWidget` 的鼠标 lambda 只 `engine_->postNoteOn/Off`、漏喂 recorder。修：鼠标 lambda 也

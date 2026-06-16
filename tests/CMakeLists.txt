@@ -16,3 +16,6 @@ keypiano_add_test(test_cfg_parser)         # P1-H
 # Phase 2:
 keypiano_add_test(test_kps_format)         # P2-A
 keypiano_add_test(test_recorder)           # P2-B
+#
+# P7-3: failure-path / lifecycle coverage
+keypiano_add_test(test_audio_engine)       # event-queue drop counting

@@ -5,9 +5,37 @@
 #include <fstream>
 #include <sstream>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace keypiano {
 
 namespace {
+
+#ifdef _WIN32
+// Converts a UTF-8 path to UTF-16 so std::fstream's wchar_t* overload (an MSVC
+// extension) opens it correctly. std::fstream(const char*) interprets the path in
+// the process ANSI code page (GBK on zh-CN), not UTF-8, so Chinese folders /
+// filenames — and Chinese Windows usernames in AppData paths — fail to open.
+// Callers pass UTF-8 (from Qt's QString::toStdString()).
+std::wstring widenUtf8(const std::string& s) {
+  if (s.empty()) return {};
+  int n = ::MultiByteToWideChar(CP_UTF8, 0, s.data(),
+                                static_cast<int>(s.size()), nullptr, 0);
+  if (n <= 0) return {};
+  std::wstring w(static_cast<size_t>(n), L'\0');
+  ::MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()),
+                        w.data(), n);
+  return w;
+}
+#endif
 
 std::string trim(const std::string& s) {
   const char* ws = " \t\r\n";
@@ -49,7 +77,11 @@ bool KpsFormat::write(const std::string& path,
                       const KpsMeta& meta,
                       const std::vector<MidiEvent>& events,
                       std::string* err) {
+#ifdef _WIN32
+  std::ofstream f(widenUtf8(path));
+#else
   std::ofstream f(path);
+#endif
   if (!f.is_open()) {
     if (err) *err = "cannot open for writing: " + path;
     return false;
@@ -85,7 +117,11 @@ bool KpsFormat::read(const std::string& path,
                      KpsMeta* meta,
                      std::vector<MidiEvent>* events,
                      std::string* err) {
+#ifdef _WIN32
+  std::ifstream f(widenUtf8(path));
+#else
   std::ifstream f(path);
+#endif
   if (!f.is_open()) {
     if (err) *err = "cannot open: " + path;
     return false;

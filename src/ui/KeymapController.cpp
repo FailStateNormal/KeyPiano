@@ -1,7 +1,5 @@
 #include "KeymapController.h"
 
-#include <fstream>
-#include <sstream>
 #include <vector>
 
 #include <QAction>
@@ -26,6 +24,19 @@
 namespace keypiano::ui {
 
 namespace {
+// Reads a whole text file via QFile so non-ASCII (e.g. Chinese) paths work on
+// Windows. std::ifstream(const char*) interprets the path in the process ANSI
+// code page (GBK on zh-CN), not UTF-8, so a UTF-8 path from QString::toStdString()
+// fails for Chinese folders/filenames — and Chinese Windows usernames put Chinese
+// in the AppData path. Returns false if the file cannot be opened.
+bool readTextFile(const QString& path, std::string* out) {
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return false;
+    const QByteArray data = f.readAll();
+    out->assign(data.constData(), static_cast<size_t>(data.size()));
+    return true;
+}
+
 // MIDI note number → human label like "C3" / "Eb4" (for status messages).
 QString midiNoteLabel(int note) {
     static const char* n[] = {"C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"};
@@ -132,11 +143,9 @@ void KeymapController::loadStartup() {
     // to the bundled default if none exists or it fails to parse cleanly.
     const QString user = userKeymapPath();
     if (QFile::exists(user)) {
-        std::ifstream f(user.toStdString());
-        if (f) {
-            std::ostringstream ss;
-            ss << f.rdbuf();
-            auto result = KeyMapParser::parse(ss.str());
+        std::string text;
+        if (readTextFile(user, &text)) {
+            auto result = KeyMapParser::parse(text);
             if (result.errors.empty()) {
                 setActiveKeymap(std::move(result.map));
                 return;
@@ -177,15 +186,13 @@ void KeymapController::openKeymap() {
         tr("Keymap files (*.map);;All files (*)"));
     if (path.isEmpty()) return;
 
-    std::ifstream f(path.toStdString());
-    if (!f) {
+    std::string text;
+    if (!readTextFile(path, &text)) {
         QMessageBox::critical(dialog_parent_, tr("Error"),
                               tr("Cannot read keymap:\n%1").arg(path));
         return;
     }
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    auto result = KeyMapParser::parse(ss.str());
+    auto result = KeyMapParser::parse(text);
     if (!result.errors.empty()) {
         QString msg;
         for (const auto& e : result.errors)
@@ -447,16 +454,14 @@ void KeymapController::savePreset() {
 
 void KeymapController::loadPreset(const QString& name) {
     const QString path = presetsDir() + "/" + name + ".map";
-    std::ifstream f(path.toStdString());
-    if (!f) {
+    std::string text;
+    if (!readTextFile(path, &text)) {
         QMessageBox::critical(dialog_parent_, tr("Error"),
                               tr("Cannot read preset:\n%1").arg(path));
         rebuildPresetMenu();  // it may have been deleted externally
         return;
     }
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    auto result = KeyMapParser::parse(ss.str());
+    auto result = KeyMapParser::parse(text);
     if (!result.errors.empty()) {
         QString msg;
         for (const auto& e : result.errors)

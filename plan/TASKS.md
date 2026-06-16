@@ -524,6 +524,31 @@
 - [结构决策更新] 剩 `SynthController`（engine 生命周期 + VST3 editor + 后端切换 + SF2/VST3 加载），耦合最深，
       留最后。本轮未动。
 
+### P7-3 增量：质量加固待办（2026-06-16，按收益/成本排序）
+> 用户 review 给出一组加固项，让我按判断排优先级并先动手。结论顺序如下（① 本轮立即做）：
+- [x] **① 中文路径 / Unicode 安全（2026-06-16，已完成）**——**真 bug，非理论风险**。根因：MSVC 的 `std::fstream`
+      用 `const char*` 构造时按当前 ANSI 代码页（中文系统 = GBK）解释路径，而 Qt `toStdString()` 给的是
+      UTF-8，两者不匹配 → 中文路径打不开。受影响：
+        - 录音 `.kps` 存/读 `KpsFormat.cpp:52/88`（`std::ofstream/ifstream(path)`）——存到中文目录或中文文件名失败/乱码。
+        - 键位 `user.map`/预设 读 `KeymapController.cpp:135/180/450`（`std::ifstream`）——**写用 QFile（安全）读用 ifstream（不安全）不对称**；
+          中文 Windows 用户名 → AppData 路径含中文 → 键位静默退回默认。
+      安全的：VST3（Steinberg `StringConvert` 当 UTF-8 转宽字符）、SF2（FluidSynth 2.x 内部转宽字符走 `_wfopen`）。
+      改法：KeymapController 三处读取改用已在用的 `QFile`（与写入侧统一）；KpsFormat 是 core 不依赖 Qt，
+      改成接受宽路径（`MultiByteToWideChar` + MSVC `wchar_t*` fstream 重载）。局部改动，不碰大架构。
+      **实现**：KeymapController 三处（loadStartup/openKeymap/loadPreset）改用匿名命名空间的 `readTextFile()`（QFile），
+      删掉不再用的 `<fstream>/<sstream>`；KpsFormat 加 `_WIN32` 守卫的 `widenUtf8()`，write/read 在 Windows 用宽路径。
+      新增测试 `KpsFormatUnicode.ChinesePathRoundTrip`（文件名用显式 UTF-8 字节，不依赖源码编码）。
+      验收：gui-debug `/W4 /WX` 干净 + headless **83/83**（+1 新测试）+ 冒烟启动正常。
+      [遗留] `src/main.cpp:34` 的 `std::ifstream` 是 headless 测试入口、非用户路径，未改。
+- [ ] **② VST3/SF2 加载失败回滚**（中低/高）——VST3 加载失败会把原本能用的 SF2 后端丢掉。先不抽大架构，
+      做局部「候选 synth 成功后再替换」的事务式流程。
+- [ ] **③ 队列丢事件统计**（低/中高）——`event_queue_.push()` 失败现在静默丢。加 atomic 计数 + 状态栏/debug 展示。
+- [ ] **④ VST3 踏板限制提示**（低/中）——真正实现 `IMidiMapping` 成本高，暂不做；至少 UI/状态提示避免用户以为 sustain pedal 坏了。
+- [ ] **⑤ 抽 AudioSession/SynthController**（中高/高，第二阶段）——长期正确方向，但用「小步迁移」，
+      等 ② 后端切换回滚改完再顺手收 `stopEngine/startEngine/synth_` 重复逻辑，不一次拆穿 MainWindow。
+- [ ] **⑥ 生命周期测试**（中/中高）——补后端切换、失败路径测试，等 ⑤ 抽出后再测更划算。
+- [暂缓] Qt `.ts/.qm` 国际化迁移（手写 I18n 仍能撑）、完整 VST3 CC/踏板实现（涉及参数映射+插件兼容，先提示限制）。
+
 ---
 
 ## 跨阶段注意事项

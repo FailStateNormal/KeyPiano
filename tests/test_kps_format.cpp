@@ -73,6 +73,47 @@ TEST_F(KpsFormatTest, RoundTripBasic) {
   }
 }
 
+// Round-trips through a path with non-ASCII (Chinese) characters. Guards the
+// Windows UTF-8 fix: std::ofstream(const char*) interprets the path in the ANSI
+// code page (GBK on zh-CN) and would fail on Chinese folders/filenames — common
+// because Chinese Windows usernames put Chinese in the temp/AppData path.
+// KpsFormat widens UTF-8 → UTF-16 on Windows so the file opens correctly.
+TEST(KpsFormatUnicode, ChinesePathRoundTrip) {
+  // "测试录音.kps" built from explicit UTF-8 bytes so the test does not depend on
+  // the source-file encoding the compiler happens to assume.
+  const std::string fname =
+      "\xE6\xB5\x8B\xE8\xAF\x95\xE5\xBD\x95\xE9\x9F\xB3.kps";
+  const std::string path = fs::temp_directory_path().string() + "/" + fname;
+  // fs::path from a UTF-8 string without the C++20-deprecated u8path().
+  const fs::path fspath{
+      std::u8string(reinterpret_cast<const char8_t*>(path.data()), path.size())};
+  std::error_code ec;
+  fs::remove(fspath, ec);  // start clean
+
+  KpsMeta meta_in;
+  meta_in.title = "Unicode";
+  meta_in.created = "2026-06-16T00:00:00Z";
+  meta_in.duration_us = 500000;
+  std::vector<MidiEvent> events_in = {
+      makeEvent(EventType::NoteOn,  0, 60, 80, 0),
+      makeEvent(EventType::NoteOff, 0, 60,  0, 250000),
+  };
+
+  std::string err;
+  ASSERT_TRUE(KpsFormat::write(path, meta_in, events_in, &err)) << err;
+  EXPECT_TRUE(fs::exists(fspath));  // file really lives at the Chinese path
+
+  KpsMeta meta_out;
+  std::vector<MidiEvent> events_out;
+  ASSERT_TRUE(KpsFormat::read(path, &meta_out, &events_out, &err)) << err;
+  EXPECT_EQ(meta_out.title, meta_in.title);
+  ASSERT_EQ(events_out.size(), events_in.size());
+  for (size_t i = 0; i < events_in.size(); ++i)
+    EXPECT_TRUE(eventsEqual(events_out[i], events_in[i])) << "mismatch at " << i;
+
+  fs::remove(fspath, ec);
+}
+
 TEST_F(KpsFormatTest, AllEventTypes) {
   KpsMeta meta_in;
   meta_in.title = "All Types";

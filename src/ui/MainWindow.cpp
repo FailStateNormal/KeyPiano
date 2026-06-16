@@ -185,7 +185,11 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 // ── Setup ──────────────────────────────────────────────────────────────────────
 
 void MainWindow::setupMenus() {
-    file_menu_ = menuBar()->addMenu(tr("&File"));
+    // No Alt-mnemonic letters on the top-level menus: every letter (F/R/H, etc.)
+    // can be remapped as a piano key, and the global hook forwards keys to Qt, so
+    // a letter mnemonic risks opening a menu mid-performance. The menus stay
+    // mouse-accessible and their useful actions all have Ctrl shortcuts.
+    file_menu_ = menuBar()->addMenu(tr("File"));
 
     act_open_sf2_ = new QAction(tr("Open SF&2..."), this);
     act_open_sf2_->setShortcut(QKeySequence("Ctrl+O"));
@@ -263,7 +267,7 @@ void MainWindow::setupMenus() {
     connect(act_exit_, &QAction::triggered, qApp, &QApplication::quit);
     file_menu_->addAction(act_exit_);
 
-    rec_menu_ = menuBar()->addMenu(tr("&Record"));
+    rec_menu_ = menuBar()->addMenu(tr("Record"));
 
     act_rec_start_ = new QAction(tr("&Start Recording"), this);
     act_rec_start_->setShortcut(QKeySequence("Ctrl+R"));
@@ -301,7 +305,7 @@ void MainWindow::setupMenus() {
 void MainWindow::setupHelpMenu() {
     // Language submenu (mutually-exclusive radio items). English/简体中文 are
     // intentionally NOT translated — each is shown in its own language.
-    help_menu_ = menuBar()->addMenu(tr("&Help"));
+    help_menu_ = menuBar()->addMenu(tr("Help"));
 
     lang_menu_ = help_menu_->addMenu(tr("&Language"));
     act_lang_en_ = lang_menu_->addAction(QStringLiteral("English"));
@@ -696,9 +700,9 @@ void MainWindow::loadPedalModeSetting() {
 
 void MainWindow::retranslateUi() {
     // Menus and submenus.
-    if (file_menu_)   file_menu_->setTitle(tr("&File"));
-    if (rec_menu_)    rec_menu_->setTitle(tr("&Record"));
-    if (help_menu_)   help_menu_->setTitle(tr("&Help"));
+    if (file_menu_)   file_menu_->setTitle(tr("File"));
+    if (rec_menu_)    rec_menu_->setTitle(tr("Record"));
+    if (help_menu_)   help_menu_->setTitle(tr("Help"));
     if (lang_menu_)   lang_menu_->setTitle(tr("&Language"));
     if (preset_menu_) preset_menu_->setTitle(tr("Key&map Presets"));
     if (toolbar_)     toolbar_->setWindowTitle(tr("Controls"));

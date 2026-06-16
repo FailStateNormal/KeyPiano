@@ -584,9 +584,18 @@
           测 ⑥ 的 `feedback_drops`——`audioCallback` 是自由函数，用桩 synth + 自建 CallbackContext/队列直接驱动，
           **无需音频设备**：fq 填满后 drain 事件即丢弃并精确计数、有空位不丢且转发、ControlChange 不产生反馈、初值 0 且每次 render 一次。
         - **已覆盖（之前）**：KpsFormat 读缺失/写坏路径/中文路径往返；Recorder 缺文件/超容量。
-      **仍缺（需 ⑤ 之上再引入 IAudioEngine 注入缝）**：后端切换失败回滚（②）、切后端 UAF、hook 生命周期——
-      SynthController 已隔离这些逻辑，但 startEngine 仍开真 AudioEngine，headless 测需注入假引擎。
+      **仍缺（需 ⑤ 之上再引入 IAudioEngine 注入缝）**：切后端 UAF、hook 生命周期——SynthController 已隔离逻辑，
+      但 startEngine 仍开真 AudioEngine，headless 测需注入假引擎。评估结论：注入缝性价比低（UAF/hook 是真线程
+      bug，假引擎复现不了，只能给伪安全感），改用人工压力测试 / ASan 覆盖，不做。
       验收：headless **90/90**（+4）。
+- [x] **② 回滚决策纯函数 + 单测（2026-06-16）**——上面评估里「唯一 80/20」：把「切后端失败后该重建什么」的纯策略
+      抽到 core 的 `src/core/synth/InstrumentRestore.h`（Qt-free，header-only：`planInstrumentRestore(snapshot)` →
+      `ReloadVst3 / ReloadFluidUser / FallbackDefault`），`SynthController::restore()` 改为调用它再执行重建（行为逐字不变）。
+      新增 `tests/test_instrument_restore.cpp`（6 个）覆盖各分支 + 边界（VST3 无路径回退、built-in 回退、VST3 优先于 builtin 标志）。
+      实际引擎重建/失败回退仍是运行时（人工测）。验收：gui-debug `/W4 /WX` 干净 + headless **96/96**（+6）+ 冒烟启动退出码 0。
+- [x] **bugfix：顶层菜单去掉字母助记键（2026-06-16）**——文件/录制/帮助原为 `&F/&R/&H`（Alt+F/R/H）。用户反馈
+      F/R/H（及几乎任何字母）都可能被重绑为钢琴键，而全局钩子用 CallNextHookEx 把键转发给 Qt → 演奏中易误开菜单。
+      改：三个顶层菜单标题去掉 `&` 助记键（中英同步 I18n），菜单仍可鼠标点开，内部有用命令本就都是 Ctrl 快捷键（演奏安全）。
 - [暂缓] Qt `.ts/.qm` 国际化迁移（手写 I18n 仍能撑）、完整 VST3 CC/踏板实现（涉及参数映射+插件兼容，先提示限制）。
 - [x] **bugfix：鼠标点击的音符现在能被录制（2026-06-16）**——根因：键盘走 `handleKeyboardEvent→feed()`，
       而 `setupPianoWidget` 的鼠标 lambda 只 `engine_->postNoteOn/Off`、漏喂 recorder。修：鼠标 lambda 也

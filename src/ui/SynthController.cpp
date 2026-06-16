@@ -10,6 +10,7 @@
 #include "bridge/AudioBridge.h"
 #include "widgets/Vst3EditorWindow.h"
 #include "synth/IPluginEditor.h"
+#include "synth/InstrumentRestore.h"
 #include "synth/SynthFactory.h"
 
 namespace keypiano::ui {
@@ -100,29 +101,39 @@ SynthController::InstrumentState SynthController::snapshot() const {
 }
 
 void SynthController::restore(const InstrumentState& s) {
+    // The target decision is a pure, separately-tested policy (Qt-free, in core).
+    const InstrumentSnapshot snap{
+        s.backend == Backend::Vst3 ? SynthBackend::Vst3 : SynthBackend::FluidSynth,
+        s.path.toStdString(), s.builtin};
+
     bool ok = false;
-    if (s.backend == Backend::Vst3 && !s.path.isEmpty()) {
-        // rebuildBackend handles the !KEYPIANO_ENABLE_VST3 case (synth_ == null →
-        // the loadInstrument guard below fails → falls through to the default).
-        ok = rebuildBackend(Backend::Vst3) && synth_ &&
-             synth_->loadInstrument(s.path.toStdString());
-        if (ok) {
-            current_vst3_path_ = s.path;
-            current_name_      = s.name;
-            current_sf2_path_.clear();
-            builtin_           = false;
-        }
-    } else if (!s.builtin && !s.path.isEmpty()) {  // FluidSynth + a user SF2
-        ok = rebuildBackend(Backend::FluidSynth) && synth_ &&
-             synth_->loadInstrument(s.path.toStdString());
-        if (ok) {
-            current_sf2_path_  = s.path;
-            current_name_      = s.name;
-            current_vst3_path_.clear();
-            builtin_           = false;
-        }
+    switch (planInstrumentRestore(snap)) {
+        case RestoreTarget::ReloadVst3:
+            // rebuildBackend handles the !KEYPIANO_ENABLE_VST3 case (synth_ == null
+            // → the loadInstrument guard fails → falls through to the default).
+            ok = rebuildBackend(Backend::Vst3) && synth_ &&
+                 synth_->loadInstrument(s.path.toStdString());
+            if (ok) {
+                current_vst3_path_ = s.path;
+                current_name_      = s.name;
+                current_sf2_path_.clear();
+                builtin_           = false;
+            }
+            break;
+        case RestoreTarget::ReloadFluidUser:
+            ok = rebuildBackend(Backend::FluidSynth) && synth_ &&
+                 synth_->loadInstrument(s.path.toStdString());
+            if (ok) {
+                current_sf2_path_  = s.path;
+                current_name_      = s.name;
+                current_vst3_path_.clear();
+                builtin_           = false;
+            }
+            break;
+        case RestoreTarget::FallbackDefault:
+            break;  // handled by the fallback below
     }
-    // Built-in default, or any restore that failed above: fall back to the bundled
+    // FallbackDefault, or any reload that failed above: fall back to the bundled
     // default piano so the user always has a working instrument.
     if (!ok) {
         rebuildBackend(Backend::FluidSynth);

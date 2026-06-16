@@ -6,7 +6,7 @@ Translator::Translator(QObject* parent) : QTranslator(parent) {
     // English source text -> Simplified Chinese. Keep %1/%2 placeholders intact.
     map_ = {
         // ── MainWindow: menus / actions / toolbar ───────────────────────────
-        {"&File", QStringLiteral("文件(&F)")},
+        {"File", QStringLiteral("文件")},
         {"Open SF&2...", QStringLiteral("打开 SF&2 音色库...")},
         {"Open &VST3 Instrument...", QStringLiteral("打开 &VST3 乐器插件...")},
         {"Show Plugin &Editor...", QStringLiteral("显示插件编辑器(&E)...")},
@@ -24,13 +24,13 @@ Translator::Translator(QObject* parent) : QTranslator(parent) {
          QStringLiteral("切换(&T)（按一下踩、再按一下抬）")},
         {"&Settings...", QStringLiteral("设置(&S)...")},
         {"E&xit", QStringLiteral("退出(&X)")},
-        {"&Record", QStringLiteral("录制(&R)")},
+        {"Record", QStringLiteral("录制")},
         {"&Start Recording", QStringLiteral("开始录制(&S)")},
         {"&Stop", QStringLiteral("停止(&S)")},
         {"&Playback", QStringLiteral("回放(&P)")},
         {"&Open Recording...", QStringLiteral("打开录音(&O)...")},
         {"Controls", QStringLiteral("控制")},
-        {"&Help", QStringLiteral("帮助(&H)")},
+        {"Help", QStringLiteral("帮助")},
         {"&Usage Guide...", QStringLiteral("使用说明(&U)...")},
         {"&About keypiano...", QStringLiteral("关于 keypiano(&A)...")},
         {"&Language", QStringLiteral("语言(&L)")},

@@ -47,3 +47,19 @@ TEST(AudioEngineStats, StartsAtZero) {
   EXPECT_EQ(engine.stats().event_drops.load(std::memory_order_relaxed), 0u);
   EXPECT_EQ(engine.stats().feedback_drops.load(std::memory_order_relaxed), 0u);
 }
+
+// Master gain: a fresh engine is at unity; setMasterGain clamps into
+// [0, kMaxMasterGain] (the slider's full scale amplifies, so the ceiling is >1).
+TEST(AudioEngineMasterGain, ClampsIntoRange) {
+  audio::AudioEngine engine;
+  EXPECT_FLOAT_EQ(engine.masterGain(), 1.0f);  // unity by default
+
+  engine.setMasterGain(2.0f);
+  EXPECT_FLOAT_EQ(engine.masterGain(), 2.0f);  // in-range value kept verbatim
+
+  engine.setMasterGain(100.0f);
+  EXPECT_FLOAT_EQ(engine.masterGain(), audio::kMaxMasterGain);  // clamped to ceiling
+
+  engine.setMasterGain(-1.0f);
+  EXPECT_FLOAT_EQ(engine.masterGain(), 0.0f);  // clamped at zero
+}

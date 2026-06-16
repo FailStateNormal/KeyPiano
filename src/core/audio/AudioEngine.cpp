@@ -97,7 +97,7 @@ void AudioEngine::close() {
 
 void AudioEngine::setMasterGain(float gain) {
   if (gain < 0.0f) gain = 0.0f;
-  else if (gain > 1.0f) gain = 1.0f;
+  else if (gain > kMaxMasterGain) gain = kMaxMasterGain;
   master_gain_.store(gain, std::memory_order_relaxed);
 }
 

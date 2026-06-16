@@ -365,7 +365,10 @@ void MainWindow::onVolumeChanged(int percent) {
 
 void MainWindow::applyMasterVolume() {
     if (!volume_slider_) return;
-    const float gain = static_cast<float>(volume_slider_->value()) / 100.0f;
+    // Map 0..100% linearly onto 0..kMaxMasterGain, so the slider's full scale is
+    // an amplifying boost (the bare SF2 output is quiet — see kMaxMasterGain).
+    const float gain = static_cast<float>(volume_slider_->value()) / 100.0f
+                       * audio::kMaxMasterGain;
     if (auto* engine = synth_ctl_->engine()) engine->setMasterGain(gain);
 }
 

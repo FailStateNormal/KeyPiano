@@ -43,6 +43,11 @@ namespace keypiano::audio {
 inline constexpr std::size_t kEventQueueCapacity = 1024;
 inline constexpr std::size_t kFeedbackQueueCapacity = 256;
 
+// Output-stage master gain at the volume slider's full scale (100%). >1 amplifies
+// the mixed buffer; the default SF2 renders quiet with plenty of headroom, so 3x
+// is a usable "loud but clean" ceiling. The UI maps 0..100% linearly onto 0..this.
+inline constexpr float kMaxMasterGain = 3.0f;
+
 using EventQueue = MpscQueue<MidiEvent, kEventQueueCapacity>;
 using FeedbackQueue = SpscQueue<MidiEvent, kFeedbackQueueCapacity>;
 
@@ -70,9 +75,10 @@ struct CallbackContext {
   FeedbackQueue*   feedback_queue = nullptr;
   Stats*           stats = nullptr;
   uint32_t         sample_rate = 44100;
-  // Output-stage master volume in [0, 1]. The audio thread reads it (relaxed)
-  // and scales the mixed buffer by it after render(). Non-owning pointer into
-  // AudioEngine::master_gain_; null means "leave the output unscaled" (unity).
+  // Output-stage master volume multiplier (>1 amplifies). The audio thread reads
+  // it (relaxed) and scales the mixed buffer by it after render(). Non-owning
+  // pointer into AudioEngine::master_gain_; null means "leave the output
+  // unscaled" (unity).
   const std::atomic<float>* master_gain = nullptr;
 };
 
@@ -121,8 +127,9 @@ class AudioEngine {
   const Stats& stats() const { return stats_; }
 
   // Output-stage master volume, applied by the audio thread after the synth
-  // renders. `gain` is clamped to [0, 1] (1.0 = unchanged, 0.0 = silent). Safe
-  // to call from any thread; the audio thread reads it with a relaxed atomic.
+  // renders. `gain` is clamped to [0, kMaxMasterGain] (1.0 = unchanged, 0.0 =
+  // silent, >1 amplifies). Safe to call from any thread; the audio thread reads
+  // it with a relaxed atomic.
   // The value survives close()/open() on the same engine, but a freshly
   // constructed engine starts at unity — the UI re-applies it after each start.
   void setMasterGain(float gain);

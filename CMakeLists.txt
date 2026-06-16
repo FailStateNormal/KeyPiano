@@ -97,6 +97,17 @@ if(KEYPIANO_ENABLE_GUI)
         endforeach()
     endif()
 
+    # ── Strip Qt's plugin .pdb debug symbols from the deploy dir ──────────────
+    # The deploy steps above drag Qt's own plugin .pdb into platforms/styles/
+    # imageformats (~46 MB). They're useless to end users and to us (Qt's
+    # symbols, not ours — our debug pdb stay in build/). Scoped to the plugin
+    # subfolders by strip_qt_pdb.cmake so our own keypiano.pdb is never touched.
+    add_custom_command(TARGET keypiano POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" "-DDIR=$<TARGET_FILE_DIR:keypiano>"
+            -P "${CMAKE_SOURCE_DIR}/cmake/strip_qt_pdb.cmake"
+        COMMENT "Stripping useless Qt plugin .pdb from deploy dir"
+    )
+
     # ── Bundle the default piano SoundFont next to the exe ────────────────────
     # GeneralUser GS is a real sampled piano (~30 MB) — too large to embed in the
     # .qrc, so it ships as a loose file in a soundfonts/ folder beside the exe.

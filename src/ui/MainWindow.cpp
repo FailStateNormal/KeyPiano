@@ -256,7 +256,9 @@ void MainWindow::setupHelpMenu() {
     help_menu_->addSeparator();
 
     act_usage_guide_ = new QAction(tr("&Usage Guide..."), this);
-    act_usage_guide_->setShortcut(QKeySequence("F1"));
+    // No F1 shortcut: F1 is a playing key (octave down) in the default keymap, and
+    // the global hook forwards keys to Qt, so an F1 accelerator would fire the
+    // guide *and* shift the octave on every press.
     connect(act_usage_guide_, &QAction::triggered, this,
             &MainWindow::onShowUsageGuide);
     help_menu_->addAction(act_usage_guide_);

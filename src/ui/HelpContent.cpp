@@ -80,6 +80,32 @@ You'll be asked to save a <code>.kps</code> file.</li>
 buffer size (smaller buffer = lower latency).</li>
 <li><b>Help &rarr; Language</b> — switch between English and 简体中文 at any time.</li>
 </ul>
+
+<h3>7. Keyboard shortcuts</h3>
+<p><b>Playing keys</b> (default keymap — remap them under <b>File &rarr; Rebind
+Keys</b>):</p>
+<table border="1" cellspacing="0" cellpadding="4">
+<tr><td><b>Z X C V B N M</b></td><td>White keys, lower octave (C3–B3)</td></tr>
+<tr><td><b>S D &nbsp; G H J</b></td><td>Black keys, lower octave</td></tr>
+<tr><td><b>Y U I O P [ ]</b></td><td>White keys, upper octave (C4–B4)</td></tr>
+<tr><td><b>7 8 &nbsp; 0 - =</b></td><td>Black keys, upper octave</td></tr>
+<tr><td><b>F1 / F2</b></td><td>Shift octave down / up</td></tr>
+<tr><td><b>Space</b></td><td>Sustain (damper) pedal</td></tr>
+<tr><td><b>F3</b></td><td>Sostenuto pedal</td></tr>
+<tr><td><b>F4</b></td><td>Soft (una corda) pedal</td></tr>
+</table>
+<p><b>Menu commands:</b></p>
+<table border="1" cellspacing="0" cellpadding="4">
+<tr><td><b>Ctrl+O</b></td><td>Open SF2...</td></tr>
+<tr><td><b>Ctrl+Shift+O</b></td><td>Open VST3 Instrument...</td></tr>
+<tr><td><b>Ctrl+E</b></td><td>Show Plugin Editor...</td></tr>
+<tr><td><b>Ctrl+K</b></td><td>Open Keymap...</td></tr>
+<tr><td><b>Ctrl+,</b></td><td>Settings...</td></tr>
+<tr><td><b>Ctrl+Q</b></td><td>Exit</td></tr>
+<tr><td><b>Ctrl+R</b></td><td>Start Recording</td></tr>
+<tr><td><b>Ctrl+.</b></td><td>Stop recording / playback</td></tr>
+<tr><td><b>Ctrl+P</b></td><td>Playback</td></tr>
+</table>
 )");
 }
 
@@ -148,6 +174,31 @@ QString usageGuideHtmlZh() {
 <li><b>文件 &rarr; 设置...</b>——选择音频输出设备、采样率与缓冲大小（缓冲越小延迟越低）。</li>
 <li><b>帮助 &rarr; 语言</b>——可随时在 English 与 简体中文 之间切换。</li>
 </ul>
+
+<h3>7. 快捷键</h3>
+<p><b>演奏按键</b>（默认键位，可在<b>文件 &rarr; 重绑按键</b>中修改）：</p>
+<table border="1" cellspacing="0" cellpadding="4">
+<tr><td><b>Z X C V B N M</b></td><td>低八度白键（C3–B3）</td></tr>
+<tr><td><b>S D &nbsp; G H J</b></td><td>低八度黑键</td></tr>
+<tr><td><b>Y U I O P [ ]</b></td><td>高八度白键（C4–B4）</td></tr>
+<tr><td><b>7 8 &nbsp; 0 - =</b></td><td>高八度黑键</td></tr>
+<tr><td><b>F1 / F2</b></td><td>整体降 / 升一个八度</td></tr>
+<tr><td><b>Space</b></td><td>延音（制音）踏板</td></tr>
+<tr><td><b>F3</b></td><td>持音（sostenuto）踏板</td></tr>
+<tr><td><b>F4</b></td><td>弱音（柔音）踏板</td></tr>
+</table>
+<p><b>菜单命令：</b></p>
+<table border="1" cellspacing="0" cellpadding="4">
+<tr><td><b>Ctrl+O</b></td><td>打开 SF2 音色库...</td></tr>
+<tr><td><b>Ctrl+Shift+O</b></td><td>打开 VST3 乐器插件...</td></tr>
+<tr><td><b>Ctrl+E</b></td><td>显示插件编辑器...</td></tr>
+<tr><td><b>Ctrl+K</b></td><td>打开键位映射...</td></tr>
+<tr><td><b>Ctrl+,</b></td><td>设置...</td></tr>
+<tr><td><b>Ctrl+Q</b></td><td>退出</td></tr>
+<tr><td><b>Ctrl+R</b></td><td>开始录制</td></tr>
+<tr><td><b>Ctrl+.</b></td><td>停止录制 / 回放</td></tr>
+<tr><td><b>Ctrl+P</b></td><td>回放</td></tr>
+</table>
 )");
 }
 

@@ -8,6 +8,7 @@
 #include "audio/AudioEngine.h"  // CallbackContext, queues, Stats, capacities
 #include "synth/SynthesizerBase.h"
 
+#include <atomic>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -119,4 +120,62 @@ TEST(AudioCallbackStats, StartsAtZeroAndRenders) {
   h.run();
   EXPECT_EQ(h.stats.feedback_drops.load(std::memory_order_relaxed), 0u);
   EXPECT_EQ(h.synth.renders, 1);  // one buffer mixed per callback
+}
+
+namespace {
+
+// A synth that writes a constant into every output sample, so a test can observe
+// the callback's output-stage master-gain multiply (StubSynth renders nothing).
+class ConstSynth : public StubSynth {
+ public:
+  void render(float* out, uint32_t frames) override {
+    for (uint32_t i = 0; i < frames * 2; ++i) out[i] += value;
+    ++renders;
+  }
+  float value = 0.5f;
+};
+
+// Run one callback over a ConstSynth(value) with the given master-gain pointer
+// and return a representative output sample (all samples are identical here).
+float runWithGain(const std::atomic<float>* gain, float value = 0.5f) {
+  ConstSynth synth;
+  synth.value = value;
+  EventQueue eq;
+  FeedbackQueue fq;
+  Stats stats;
+  CallbackContext ctx;
+  ctx.synth = &synth;
+  ctx.event_queue = &eq;
+  ctx.feedback_queue = &fq;
+  ctx.stats = &stats;
+  ctx.sample_rate = 44100;
+  ctx.master_gain = gain;
+  std::vector<float> buf(256 * 2, 0.0f);
+  audioCallback(buf.data(), nullptr, 256, 0.0, 0, &ctx);
+  return buf[256];  // a mid-buffer sample; they're all equal
+}
+
+}  // namespace
+
+// Master gain scales the rendered buffer: synth writes 0.5, gain 0.5 -> 0.25.
+TEST(AudioCallbackGain, ScalesOutputByGain) {
+  std::atomic<float> gain{0.5f};
+  EXPECT_FLOAT_EQ(runWithGain(&gain), 0.25f);
+}
+
+// Unity gain leaves the output untouched (the callback skips the multiply).
+TEST(AudioCallbackGain, UnityGainLeavesOutputUnchanged) {
+  std::atomic<float> gain{1.0f};
+  EXPECT_FLOAT_EQ(runWithGain(&gain), 0.5f);
+}
+
+// A null master_gain pointer means "unscaled" — same result as unity.
+TEST(AudioCallbackGain, NullPointerLeavesOutputUnchanged) {
+  EXPECT_FLOAT_EQ(runWithGain(nullptr), 0.5f);
+}
+
+// Zero gain silences the output.
+TEST(AudioCallbackGain, ZeroGainSilences) {
+  std::atomic<float> gain{0.0f};
+  EXPECT_FLOAT_EQ(runWithGain(&gain), 0.0f);
 }

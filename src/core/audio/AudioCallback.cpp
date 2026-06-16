@@ -60,6 +60,17 @@ int audioCallback(void* outputBuffer, void* /*inputBuffer*/,
   // Mix one buffer of audio.
   ctx->synth->render(out, nFrames);
 
+  // Output-stage master volume. Relaxed load — it's a single scalar with no
+  // ordering dependency on anything else here. Skip the multiply at unity so the
+  // common (full-volume) case touches nothing. Audio-thread safe: no alloc/lock.
+  if (ctx->master_gain) {
+    const float gain = ctx->master_gain->load(std::memory_order_relaxed);
+    if (gain != 1.0f) {
+      const unsigned int n = nFrames * 2;  // interleaved stereo
+      for (unsigned int i = 0; i < n; ++i) out[i] *= gain;
+    }
+  }
+
   // Publish load/latency metrics. cpu_load is the fraction of the period budget
   // this callback consumed; >1.0 means we are at risk of an underrun.
   const auto t1 = std::chrono::steady_clock::now();

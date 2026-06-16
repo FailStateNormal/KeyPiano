@@ -19,6 +19,8 @@ class QCloseEvent;
 class QEvent;
 class QLabel;
 class QMenu;
+class QShowEvent;
+class QSlider;
 class QTimer;
 class QToolBar;
 class QTranslator;
@@ -44,9 +46,12 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
-    // Catches QEvent::LanguageChange (sent when a translator is installed/removed)
-    // and re-applies every code-set string via retranslateUi().
+    // Catches QEvent::LanguageChange (re-applies code-set strings) and
+    // QEvent::ActivationChange (tracks focus for the background-play gate).
     void changeEvent(QEvent* event) override;
+    // Seeds window_active_ on first show so the background-play gate is correct
+    // before the first ActivationChange arrives.
+    void showEvent(QShowEvent* event) override;
 
 private slots:
     void onOpenSf2();
@@ -63,6 +68,7 @@ private:
     enum class PedalMode { Hold, Toggle };
 
     void setupMenus();
+    void setupAudioMenu();   // builds the Audio menu (volume slider + background play)
     void setupHelpMenu();
     // Switch the UI language (installs/removes the embedded translator, persists
     // the choice, and refreshes the menu checkmarks).
@@ -72,6 +78,15 @@ private:
     // Switch pedal behaviour; releases any latched pedals and persists the choice.
     void setPedalMode(PedalMode mode);
     void loadPedalModeSetting();  // apply the pedal mode saved from a previous run
+
+    // ── Master volume + background play ──────────────────────────────────────
+    void onVolumeChanged(int percent);  // slider moved: label + apply + persist
+    void applyMasterVolume();           // push the current slider value to the engine
+    void setBackgroundPlay(bool on);    // toggle the gate + persist the choice
+    void loadAudioPrefs();              // apply volume + background-play from last run
+    // Silence every sounding note. Used when the window loses focus while
+    // background play is off, so a note whose key-up we will now ignore can't hang.
+    void panicAllNotes();
     void refreshSf2Label();       // rebuild the status-bar instrument label
     void setupToolBar();
     void setupStatusBar();
@@ -129,6 +144,12 @@ private:
     // on the hook thread; the soft flag is also read there to scale note velocity.
     std::atomic<bool> pedal_engaged_[3];
 
+    // Background play: when false, handleKeyboardEvent ignores keys unless our
+    // window is active. window_active_ is written on the UI thread (showEvent /
+    // ActivationChange) and read on the hook thread — both plain atomics.
+    std::atomic<bool> background_play_{false};  // UI writes, hook reads
+    std::atomic<bool> window_active_{false};    // UI writes, hook reads
+
     // Index 0/1/2 ↔ CC 64/66/67. Returns -1 if cc is not a pedal.
     static int pedalIndex(int cc) {
         return cc == 64 ? 0 : cc == 66 ? 1 : cc == 67 ? 2 : -1;
@@ -141,10 +162,15 @@ private:
     uint8_t softVelocity(int vel) const;
 
     QMenu*   file_menu_       = nullptr;
+    QMenu*   audio_menu_      = nullptr;
     QMenu*   rec_menu_        = nullptr;
     QMenu*   help_menu_       = nullptr;
     QMenu*   lang_menu_       = nullptr;
     QToolBar* toolbar_        = nullptr;
+    QAction* act_background_play_ = nullptr;
+    QSlider* volume_slider_   = nullptr;
+    QLabel*  lbl_volume_      = nullptr;  // "Volume" caption inside the Audio menu
+    QLabel*  lbl_volume_pct_  = nullptr;  // live "85%" readout next to the slider
     QAction* act_open_sf2_     = nullptr;
     QAction* act_open_vst3_    = nullptr;
     QAction* act_show_editor_  = nullptr;

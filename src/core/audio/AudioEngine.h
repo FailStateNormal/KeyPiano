@@ -70,6 +70,10 @@ struct CallbackContext {
   FeedbackQueue*   feedback_queue = nullptr;
   Stats*           stats = nullptr;
   uint32_t         sample_rate = 44100;
+  // Output-stage master volume in [0, 1]. The audio thread reads it (relaxed)
+  // and scales the mixed buffer by it after render(). Non-owning pointer into
+  // AudioEngine::master_gain_; null means "leave the output unscaled" (unity).
+  const std::atomic<float>* master_gain = nullptr;
 };
 
 class AudioEngine {
@@ -116,6 +120,16 @@ class AudioEngine {
 
   const Stats& stats() const { return stats_; }
 
+  // Output-stage master volume, applied by the audio thread after the synth
+  // renders. `gain` is clamped to [0, 1] (1.0 = unchanged, 0.0 = silent). Safe
+  // to call from any thread; the audio thread reads it with a relaxed atomic.
+  // The value survives close()/open() on the same engine, but a freshly
+  // constructed engine starts at unity — the UI re-applies it after each start.
+  void setMasterGain(float gain);
+  float masterGain() const {
+    return master_gain_.load(std::memory_order_relaxed);
+  }
+
   // Actual negotiated buffer size after open() (RtAudio may adjust the request).
   uint32_t bufferFrames() const { return config_.buffer_frames; }
 
@@ -125,6 +139,7 @@ class AudioEngine {
   EventQueue      event_queue_;
   FeedbackQueue   feedback_queue_;
   Stats           stats_;
+  std::atomic<float> master_gain_{1.0f};  // output-stage volume, see setMasterGain
   CallbackContext context_;
   RtAudio         dac_;
   Config          config_;

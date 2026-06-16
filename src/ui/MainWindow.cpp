@@ -23,12 +23,17 @@
 #include <QMetaObject>
 #include <QRegularExpression>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QStandardPaths>
+#include <QHBoxLayout>
+#include <QShowEvent>
+#include <QSlider>
 #include <QStatusBar>
 #include <QTextBrowser>
 #include <QTimer>
 #include <QToolBar>
 #include <QVBoxLayout>
+#include <QWidgetAction>
 
 #include "HelpContent.h"
 #include "I18n.h"
@@ -147,6 +152,9 @@ MainWindow::MainWindow(QWidget* parent)
             connect(bridge, &AudioBridge::noteReleased,
                     piano_widget_, &PianoWidget::onNoteReleased);
         }
+        // A freshly built AudioEngine starts at unity gain — re-apply the user's
+        // chosen master volume (same pattern as pedal state above).
+        applyMasterVolume();
     };
     host.onInstrumentChanged = [this] { refreshSf2Label(); updateEditorAction(); };
     host.dialogParent = this;
@@ -162,6 +170,7 @@ MainWindow::MainWindow(QWidget* parent)
     keymap_ctl_->loadStartup();
     synth_ctl_->loadDefault();
     loadPedalModeSetting();
+    loadAudioPrefs();       // re-apply volume + background-play from a previous run
     loadLanguageSetting();  // re-apply the language chosen in a previous session
 
     status_timer_ = new QTimer(this);
@@ -267,6 +276,8 @@ void MainWindow::setupMenus() {
     connect(act_exit_, &QAction::triggered, qApp, &QApplication::quit);
     file_menu_->addAction(act_exit_);
 
+    setupAudioMenu();  // Audio menu sits between File and Record
+
     rec_menu_ = menuBar()->addMenu(tr("Record"));
 
     act_rec_start_ = new QAction(tr("&Start Recording"), this);
@@ -300,6 +311,91 @@ void MainWindow::setupMenus() {
 
     // The controller owns the enabled-state logic for these three actions.
     rec_ctl_->setActions(act_rec_start_, act_stop_, act_playback_);
+}
+
+void MainWindow::setupAudioMenu() {
+    audio_menu_ = menuBar()->addMenu(tr("Audio"));
+
+    // Master volume: a labelled slider embedded straight in the menu via
+    // QWidgetAction. The menu stays open while dragging, so it reads like the
+    // little volume popups users already expect.
+    auto* vol_widget = new QWidget(this);
+    auto* vlay = new QHBoxLayout(vol_widget);
+    vlay->setContentsMargins(12, 4, 12, 4);
+    vlay->setSpacing(8);
+    lbl_volume_ = new QLabel(tr("Volume"), vol_widget);
+    volume_slider_ = new QSlider(Qt::Horizontal, vol_widget);
+    volume_slider_->setRange(0, 100);
+    volume_slider_->setMinimumWidth(140);
+    // Set BEFORE connecting so this fires nothing; loadAudioPrefs() later
+    // overrides it with the saved value (also without re-persisting).
+    volume_slider_->setValue(100);
+    lbl_volume_pct_ = new QLabel(QStringLiteral("100%"), vol_widget);
+    lbl_volume_pct_->setMinimumWidth(36);
+    vlay->addWidget(lbl_volume_);
+    vlay->addWidget(volume_slider_, /*stretch=*/1);
+    vlay->addWidget(lbl_volume_pct_);
+
+    auto* vol_action = new QWidgetAction(this);
+    vol_action->setDefaultWidget(vol_widget);
+    audio_menu_->addAction(vol_action);
+
+    connect(volume_slider_, &QSlider::valueChanged,
+            this, &MainWindow::onVolumeChanged);
+
+    audio_menu_->addSeparator();
+
+    // Background play: the global hook is always installed; this only gates
+    // whether handleKeyboardEvent acts on keys while our window is unfocused.
+    // Default off — loadAudioPrefs() applies the saved choice.
+    act_background_play_ =
+        new QAction(tr("Background Play (map keys when not focused)"), this);
+    act_background_play_->setCheckable(true);
+    connect(act_background_play_, &QAction::toggled,
+            this, &MainWindow::setBackgroundPlay);
+    audio_menu_->addAction(act_background_play_);
+}
+
+void MainWindow::onVolumeChanged(int percent) {
+    if (lbl_volume_pct_)
+        lbl_volume_pct_->setText(QStringLiteral("%1%").arg(percent));
+    applyMasterVolume();
+    QSettings("keypiano", "keypiano").setValue("master_volume", percent);
+}
+
+void MainWindow::applyMasterVolume() {
+    if (!volume_slider_) return;
+    const float gain = static_cast<float>(volume_slider_->value()) / 100.0f;
+    if (auto* engine = synth_ctl_->engine()) engine->setMasterGain(gain);
+}
+
+void MainWindow::setBackgroundPlay(bool on) {
+    background_play_.store(on, std::memory_order_relaxed);
+    if (act_background_play_) act_background_play_->setChecked(on);
+    QSettings("keypiano", "keypiano").setValue("background_play", on);
+}
+
+void MainWindow::loadAudioPrefs() {
+    QSettings settings("keypiano", "keypiano");
+
+    int vol = settings.value("master_volume", 100).toInt();
+    vol = vol < 0 ? 0 : vol > 100 ? 100 : vol;
+    if (volume_slider_) {
+        // Apply without re-persisting (the blocker stops onVolumeChanged firing);
+        // then sync the readout label and push the gain to the engine by hand.
+        const QSignalBlocker block(volume_slider_);
+        volume_slider_->setValue(vol);
+    }
+    if (lbl_volume_pct_)
+        lbl_volume_pct_->setText(QStringLiteral("%1%").arg(vol));
+    applyMasterVolume();
+
+    setBackgroundPlay(settings.value("background_play", false).toBool());
+}
+
+void MainWindow::panicAllNotes() {
+    if (auto* engine = synth_ctl_->engine()) engine->postAllNotesOff(0);
+    if (piano_widget_) piano_widget_->releaseAll();
 }
 
 void MainWindow::setupHelpMenu() {
@@ -386,6 +482,14 @@ uint8_t MainWindow::softVelocity(int vel) const {
 }
 
 void MainWindow::handleKeyboardEvent(const KeyEvent& kev) {
+    // Background-play gate: when off, ignore keys unless our window is focused.
+    // Runs on the hook thread, so read both flags as plain atomics — no Qt calls.
+    // (On focus loss with background play off, changeEvent() also silences any
+    // sounding notes, so a note whose key-up we now drop can't hang.)
+    if (!background_play_.load(std::memory_order_relaxed) &&
+        !window_active_.load(std::memory_order_relaxed))
+        return;
+
     // Rebind capture: if a piano key is waiting for a physical key, the controller
     // grabs this keydown (marshalling to the UI thread) instead of playing a note.
     if (kev.is_keydown && keymap_ctl_->tryCaptureRebind(kev.vk_code)) return;
@@ -643,7 +747,22 @@ void MainWindow::updateStatus() {
 
 void MainWindow::changeEvent(QEvent* event) {
     if (event->type() == QEvent::LanguageChange) retranslateUi();
+    if (event->type() == QEvent::ActivationChange) {
+        const bool active = isActiveWindow();
+        window_active_.store(active, std::memory_order_relaxed);
+        // Losing focus while background play is off: silence any sounding notes,
+        // since their key-ups would now be dropped by the gate and hang.
+        if (!active && !background_play_.load(std::memory_order_relaxed))
+            panicAllNotes();
+    }
     QMainWindow::changeEvent(event);
+}
+
+void MainWindow::showEvent(QShowEvent* event) {
+    // Seed the focus flag before the first ActivationChange arrives, so keys map
+    // immediately on a normal foreground launch (background play default off).
+    window_active_.store(isActiveWindow(), std::memory_order_relaxed);
+    QMainWindow::showEvent(event);
 }
 
 void MainWindow::setLanguage(Lang lang) {
@@ -701,6 +820,7 @@ void MainWindow::loadPedalModeSetting() {
 void MainWindow::retranslateUi() {
     // Menus and submenus.
     if (file_menu_)   file_menu_->setTitle(tr("File"));
+    if (audio_menu_)  audio_menu_->setTitle(tr("Audio"));
     if (rec_menu_)    rec_menu_->setTitle(tr("Record"));
     if (help_menu_)   help_menu_->setTitle(tr("Help"));
     if (lang_menu_)   lang_menu_->setTitle(tr("&Language"));
@@ -725,6 +845,12 @@ void MainWindow::retranslateUi() {
         act_pedal_toggle_->setText(tr("&Toggle (press once on, again off)"));
     if (act_settings_)    act_settings_->setText(tr("&Settings..."));
     if (act_exit_)        act_exit_->setText(tr("E&xit"));
+
+    // Audio menu.
+    if (lbl_volume_) lbl_volume_->setText(tr("Volume"));
+    if (act_background_play_)
+        act_background_play_->setText(
+            tr("Background Play (map keys when not focused)"));
 
     // Record menu actions.
     if (act_rec_start_) act_rec_start_->setText(tr("&Start Recording"));

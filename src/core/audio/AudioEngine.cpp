@@ -47,6 +47,7 @@ bool AudioEngine::open(const Config& cfg, SynthesizerBase* synth) {
   context_.feedback_queue = &feedback_queue_;
   context_.stats = &stats_;
   context_.sample_rate = cfg.sample_rate;
+  context_.master_gain = &master_gain_;  // output-stage volume (survives close)
 
   unsigned int buffer_frames = cfg.buffer_frames;
   RtAudioErrorType err =
@@ -92,6 +93,12 @@ void AudioEngine::close() {
 
   context_ = CallbackContext{};
   open_ = false;
+}
+
+void AudioEngine::setMasterGain(float gain) {
+  if (gain < 0.0f) gain = 0.0f;
+  else if (gain > 1.0f) gain = 1.0f;
+  master_gain_.store(gain, std::memory_order_relaxed);
 }
 
 void AudioEngine::post(EventType type, uint8_t ch, uint8_t a, uint8_t b) {
